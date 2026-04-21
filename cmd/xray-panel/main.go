@@ -1,16 +1,24 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
-	"fmt"
 	"log"
+	nethttp "net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"flint2-xray-web-console/internal/config"
+	panelhttp "flint2-xray-web-console/internal/http"
+	"flint2-xray-web-console/internal/service"
+	"flint2-xray-web-console/internal/xray"
 )
 
 func main() {
-	configPath := flag.String("config", "/etc/xray-panel/panel.yaml", "path to panel config file")
+	configPath := flag.String("config", "/etc/xray-panel/panel.yaml", "path to panel config")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -18,14 +26,48 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "xray-panel: loaded config from %s\n", *configPath)
-	fmt.Fprintf(os.Stdout, "  listen:         %s\n", cfg.Listen)
-	fmt.Fprintf(os.Stdout, "  server_address: %s\n", cfg.ServerAddress)
-	fmt.Fprintf(os.Stdout, "  xray_config:    %s\n", cfg.XrayConfig)
-	fmt.Fprintf(os.Stdout, "  xray_bin:       %s\n", cfg.XrayBin)
-	fmt.Fprintf(os.Stdout, "  xray_init:      %s\n", cfg.XrayInit)
-	fmt.Fprintf(os.Stdout, "  stats_api:      %q\n", cfg.StatsAPI)
-	fmt.Fprintf(os.Stdout, "  disabled_store: %s\n", cfg.DisabledStore)
+	if err := panelhttp.CheckLANBind(cfg.Listen); err != nil {
+		log.Fatalf("refusing to start: %v", err)
+	}
 
-	log.Println("HTTP server not yet implemented; exiting.")
+	mgr := &service.Manager{
+		InitScript: cfg.XrayInit,
+		XrayBin:    cfg.XrayBin,
+		ConfigPath: cfg.XrayConfig,
+		Timeout:    15 * time.Second,
+	}
+	keys := &xray.KeyTool{
+		XrayBin: cfg.XrayBin,
+		Timeout: 5 * time.Second,
+	}
+	srv := &panelhttp.Server{
+		Cfg:      cfg,
+		Service:  mgr,
+		Keys:     keys,
+		ConfPath: cfg.XrayConfig,
+	}
+
+	httpSrv := &nethttp.Server{
+		Addr:              cfg.Listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		log.Printf("xray-panel listening on %s", cfg.Listen)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, nethttp.ErrServerClosed) {
+			log.Fatalf("http: %v", err)
+		}
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	log.Println("shutting down")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
 }
