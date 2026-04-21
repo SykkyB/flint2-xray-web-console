@@ -158,14 +158,21 @@ $('#btn-add-client').addEventListener('click', async () => {
 async function openClientModal(client) {
   const dlg = $('#client-modal');
   $('#client-modal-title').textContent = client.name || client.id;
-  const link = await api('GET', `/api/clients/${encodeURIComponent(client.id)}/link`);
-  $('#client-link').value = link.url;
-  $('#client-qr').src = `/api/clients/${encodeURIComponent(client.id)}/qr.png`;
+  $('#client-link').value = 'loading…';
+  $('#client-qr').removeAttribute('src');
   // Rewire the action buttons to this specific client.
   $('#btn-rename-client').onclick = () => renameClient(client);
   $('#btn-disable-client').onclick = () => disableClient(client, dlg);
   $('#btn-delete-client').onclick = () => deleteClient(client.id, client.name, dlg);
   dlg.showModal();
+  try {
+    const link = await api('GET', `/api/clients/${encodeURIComponent(client.id)}/link`);
+    $('#client-link').value = link.url;
+    $('#client-qr').src = `/api/clients/${encodeURIComponent(client.id)}/qr.png`;
+  } catch (e) {
+    $('#client-link').value = '';
+    toast(`link: ${e.message}`, 'error');
+  }
 }
 $('#btn-close-modal').addEventListener('click', () => $('#client-modal').close());
 $('#btn-copy-link').addEventListener('click', async () => {

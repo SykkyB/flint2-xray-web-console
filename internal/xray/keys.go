@@ -79,17 +79,29 @@ func (k *KeyTool) exec(ctx context.Context, extra ...string) ([]byte, error) {
 	return run(ctx, k.XrayBin, args...)
 }
 
-// keyLineRe matches lines like "Public key: <base64>" produced by xray's
-// x25519 subcommand. Labels vary between xray versions (sometimes with
-// extra lines like "Password: …") so we match each label independently.
-var keyLineRe = regexp.MustCompile(`(?mi)^\s*(Private key|Public key)\s*:\s*(\S+)\s*$`)
+// Labels vary between xray versions:
+//   - pre-1.8.x:   "Private key: …"     / "Public key: …"
+//   - 1.8.x–25.x:  "Private key: …"     / "Public key: …"      (+ extra Hash32/Password lines)
+//   - 26.x:        "PrivateKey: …"      / "Password (PublicKey): …"
+// These regexes accept the union so the panel works across versions.
+var (
+	privKeyRe = regexp.MustCompile(`(?mi)^\s*Private\s*key\s*:\s*(\S+)`)
+	pubKeyRe  = regexp.MustCompile(`(?mi)^\s*(?:Public\s*key|Password\s*\(\s*PublicKey\s*\))\s*:\s*(\S+)`)
+)
 
 func extractKey(out []byte, label string) (string, bool) {
-	want := strings.ToLower(label)
-	for _, m := range keyLineRe.FindAllStringSubmatch(string(out), -1) {
-		if strings.EqualFold(m[1], want) {
-			return m[2], true
-		}
+	var re *regexp.Regexp
+	switch strings.ToLower(label) {
+	case "private key":
+		re = privKeyRe
+	case "public key":
+		re = pubKeyRe
+	default:
+		return "", false
 	}
-	return "", false
+	m := re.FindStringSubmatch(string(out))
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
 }

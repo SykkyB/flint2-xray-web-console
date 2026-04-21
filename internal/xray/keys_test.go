@@ -37,6 +37,20 @@ func TestGenerate_ExtraLines(t *testing.T) {
 	}
 }
 
+func TestGenerate_Xray26Format(t *testing.T) {
+	// xray v26 dropped the space in "PrivateKey:" and renamed the public
+	// key line to "Password (PublicKey):" alongside a new Hash32 line.
+	out := "PrivateKey: priv-xyz\nPassword (PublicKey): pub-xyz\nHash32: deadbeef\n"
+	k := &KeyTool{XrayBin: "/usr/bin/xray", Run: fakeRunner(out, nil)}
+	kp, err := k.Generate(context.Background())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if kp.Private != "priv-xyz" || kp.Public != "pub-xyz" {
+		t.Errorf("parse: got %+v", kp)
+	}
+}
+
 func TestGenerate_Unparseable(t *testing.T) {
 	k := &KeyTool{XrayBin: "/usr/bin/xray", Run: fakeRunner("something totally different", nil)}
 	if _, err := k.Generate(context.Background()); err == nil {
