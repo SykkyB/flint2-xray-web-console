@@ -10,6 +10,7 @@ import (
 
 	"flint2-xray-web-console/internal/config"
 	"flint2-xray-web-console/internal/service"
+	"flint2-xray-web-console/internal/store"
 	"flint2-xray-web-console/internal/xray"
 )
 
@@ -20,7 +21,13 @@ type Server struct {
 	Cfg      *config.Config
 	Service  *service.Manager
 	Keys     *xray.KeyTool
+	Disabled *store.Disabled
 	ConfPath string // usually Cfg.XrayConfig, duplicated for convenience
+
+	// writeMu serialises every mutation of the xray config. Holders must
+	// also take care to call InvalidatePublicKey after any change that
+	// could have touched realitySettings.privateKey.
+	writeMu sync.Mutex
 
 	// pubKey is the cached X25519 public key derived from the current
 	// realitySettings.privateKey. It is populated lazily on first use and
@@ -35,6 +42,8 @@ func (s *Server) Handler() nethttp.Handler {
 	mux := nethttp.NewServeMux()
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/service/status", s.handleServiceStatus)
+	s.registerClientRoutes(mux)
+	s.registerServerAdminRoutes(mux)
 	return BasicAuth(s.Cfg.Auth.Username, s.Cfg.Auth.PasswordBcrypt, mux)
 }
 
@@ -68,12 +77,20 @@ func (s *Server) publicKey(ctx context.Context, priv string) (string, error) {
 // explicit (not the raw xray.File) so we control what's exposed — in
 // particular, the Reality private key never leaves the server.
 type stateResponse struct {
-	ServerAddress   string         `json:"server_address"`
-	Service         service.State  `json:"service"`
-	Server          serverBlock    `json:"server"`
-	Clients         []clientBlock  `json:"clients"`
-	StatsAPIEnabled bool           `json:"stats_api_enabled"`
-	Warnings        []string       `json:"warnings,omitempty"`
+	ServerAddress   string                `json:"server_address"`
+	Service         service.State         `json:"service"`
+	Server          serverBlock           `json:"server"`
+	Clients         []clientBlock         `json:"clients"`
+	Disabled        []disabledClientBlock `json:"disabled"`
+	StatsAPIEnabled bool                  `json:"stats_api_enabled"`
+	Warnings        []string              `json:"warnings,omitempty"`
+}
+
+type disabledClientBlock struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Flow       string    `json:"flow,omitempty"`
+	DisabledAt time.Time `json:"disabledAt"`
 }
 
 type serverBlock struct {
@@ -150,6 +167,22 @@ func (s *Server) handleState(w nethttp.ResponseWriter, r *nethttp.Request) {
 				Name: c.Email,
 				Flow: c.Flow,
 			})
+		}
+	}
+
+	if s.Disabled != nil {
+		disabled, err := s.Disabled.List()
+		if err != nil {
+			resp.Warnings = append(resp.Warnings, fmt.Sprintf("disabled store: %v", err))
+		} else {
+			for _, d := range disabled {
+				resp.Disabled = append(resp.Disabled, disabledClientBlock{
+					ID:         d.Client.ID,
+					Name:       d.Client.Email,
+					Flow:       d.Client.Flow,
+					DisabledAt: d.DisabledAt,
+				})
+			}
 		}
 	}
 

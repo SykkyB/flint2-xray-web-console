@@ -14,6 +14,7 @@ import (
 	"flint2-xray-web-console/internal/config"
 	panelhttp "flint2-xray-web-console/internal/http"
 	"flint2-xray-web-console/internal/service"
+	"flint2-xray-web-console/internal/store"
 	"flint2-xray-web-console/internal/xray"
 )
 
@@ -44,6 +45,7 @@ func main() {
 		Cfg:      cfg,
 		Service:  mgr,
 		Keys:     keys,
+		Disabled: store.New(cfg.DisabledStore),
 		ConfPath: cfg.XrayConfig,
 	}
 
