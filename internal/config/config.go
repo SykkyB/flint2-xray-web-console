@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -119,6 +120,44 @@ func (c *Config) validate() error {
 	}
 	if !strings.HasPrefix(c.Auth.PasswordBcrypt, "$2") {
 		return fmt.Errorf("auth.password_bcrypt does not look like a bcrypt hash")
+	}
+	return nil
+}
+
+// statsAPIRe matches the `stats_api:` line in panel.yaml. We do a
+// line-level rewrite instead of round-tripping through yaml.v3 so
+// comments and field order survive.
+var statsAPIRe = regexp.MustCompile(`(?m)^([ \t]*stats_api[ \t]*:).*$`)
+
+// WriteStatsAPI rewrites the stats_api line in panel.yaml at path to
+// the given value, preserving everything else. A .bak of the previous
+// file is written alongside before the replacement lands.
+func WriteStatsAPI(path, value string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	replacement := fmt.Sprintf("${1} %q", value)
+	var patched []byte
+	if statsAPIRe.Match(raw) {
+		patched = statsAPIRe.ReplaceAll(raw, []byte(replacement))
+	} else {
+		// No existing line — append one.
+		trailing := ""
+		if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+			trailing = "\n"
+		}
+		patched = append(append([]byte{}, raw...), []byte(trailing+fmt.Sprintf("stats_api: %q\n", value))...)
+	}
+	if err := os.WriteFile(path+".bak", raw, 0o600); err != nil {
+		return fmt.Errorf("write .bak: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, patched, 0o600); err != nil {
+		return fmt.Errorf("write tmp: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename tmp: %w", err)
 	}
 	return nil
 }

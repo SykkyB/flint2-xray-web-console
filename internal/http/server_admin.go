@@ -11,8 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"flint2-xray-web-console/internal/config"
 	"flint2-xray-web-console/internal/xray"
 )
+
+// defaultStatsAPI is what we put into the api inbound and into
+// panel.yaml when the operator clicks Enable-stats without having
+// pre-filled stats_api in the config file.
+const defaultStatsAPI = "127.0.0.1:10085"
 
 // registerServerAdminRoutes adds the "server-admin" endpoints: Reality
 // parameter edits, key regeneration, and enabling the stats API.
@@ -141,13 +147,16 @@ type enableStatsResp struct {
 }
 
 func (s *Server) handleEnableStats(w nethttp.ResponseWriter, r *nethttp.Request) {
-	if s.Cfg.StatsAPI == "" {
-		writeErr(w, nethttp.StatusBadRequest, fmt.Errorf("stats_api is not set in panel config; cannot wire the api inbound"))
-		return
+	// No stats_api in panel.yaml? Default to localhost:10085 and persist
+	// that choice below, so the next /api/activity call just works
+	// without requiring a manual panel restart.
+	target := s.Cfg.StatsAPI
+	if target == "" {
+		target = defaultStatsAPI
 	}
-	host, portStr, err := net.SplitHostPort(s.Cfg.StatsAPI)
+	host, portStr, err := net.SplitHostPort(target)
 	if err != nil {
-		writeErr(w, nethttp.StatusBadRequest, fmt.Errorf("stats_api %q: %w", s.Cfg.StatsAPI, err))
+		writeErr(w, nethttp.StatusBadRequest, fmt.Errorf("stats_api %q: %w", target, err))
 		return
 	}
 	port, err := strconv.Atoi(portStr)
@@ -199,8 +208,28 @@ func (s *Server) handleEnableStats(w nethttp.ResponseWriter, r *nethttp.Request)
 		writeErr(w, statusForErr(err), err)
 		return
 	}
+
+	// Persist stats_api into panel.yaml (if we know where it is) so the
+	// address survives restarts, and update in-memory Cfg so the
+	// already-running /api/activity picks it up immediately.
+	if s.Cfg.StatsAPI == "" {
+		s.Cfg.StatsAPI = target
+		if s.PanelConfigPath != "" {
+			if err := config.WriteStatsAPI(s.PanelConfigPath, target); err != nil {
+				// xray is already patched and restarted; surface the yaml
+				// error as a warning, not a failure.
+				writeJSON(w, nethttp.StatusOK, map[string]any{
+					"apiAddress": target,
+					"status":     "enabled",
+					"warning":    fmt.Sprintf("xray patched but could not update panel.yaml: %v", err),
+				})
+				return
+			}
+		}
+	}
+
 	writeJSON(w, nethttp.StatusOK, enableStatsResp{
-		APIAddress: s.Cfg.StatsAPI,
+		APIAddress: target,
 		Status:     "enabled",
 	})
 }

@@ -42,11 +42,12 @@ func main() {
 		Timeout: 5 * time.Second,
 	}
 	srv := &panelhttp.Server{
-		Cfg:      cfg,
-		Service:  mgr,
-		Keys:     keys,
-		Disabled: store.New(cfg.DisabledStore),
-		ConfPath: cfg.XrayConfig,
+		Cfg:             cfg,
+		Service:         mgr,
+		Keys:            keys,
+		Disabled:        store.New(cfg.DisabledStore),
+		ConfPath:        cfg.XrayConfig,
+		PanelConfigPath: *configPath,
 	}
 
 	httpSrv := &nethttp.Server{

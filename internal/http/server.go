@@ -24,6 +24,12 @@ type Server struct {
 	Disabled *store.Disabled
 	ConfPath string // usually Cfg.XrayConfig, duplicated for convenience
 
+	// PanelConfigPath is the path to panel.yaml itself. Used by
+	// enable-stats to write stats_api back so Activity works without a
+	// manual restart. Optional: tests leave it empty and the handler
+	// skips persistence.
+	PanelConfigPath string
+
 	// writeMu serialises every mutation of the xray config. Holders must
 	// also take care to call InvalidatePublicKey after any change that
 	// could have touched realitySettings.privateKey.

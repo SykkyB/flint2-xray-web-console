@@ -180,12 +180,19 @@ func TestEnableStats(t *testing.T) {
 func TestEnableStats_NoStatsAPIInConfig(t *testing.T) {
 	env := newClientTestEnv(t)
 	env.Srv.Cfg.StatsAPI = ""
+	// Leave PanelConfigPath empty: handler should still succeed and
+	// default the inbound to 127.0.0.1:10085 without attempting a
+	// yaml rewrite.
 
 	w := do(env.Srv.Handler(), "POST", "/api/server/enable-stats", nil)
-	if w.Code != nethttp.StatusBadRequest {
-		t.Errorf("code: %d body=%s", w.Code, w.Body.String())
+	if w.Code != nethttp.StatusOK {
+		t.Fatalf("code: %d body=%s", w.Code, w.Body.String())
 	}
-	if env.InitCalls != 0 {
-		t.Errorf("restart should not happen, init=%d", env.InitCalls)
+	if env.Srv.Cfg.StatsAPI != "127.0.0.1:10085" {
+		t.Errorf("in-memory Cfg.StatsAPI not set: %q", env.Srv.Cfg.StatsAPI)
+	}
+	f, _ := xray.Read(env.ConfPath)
+	if len(f.Inbounds) < 2 || f.Inbounds[0].Tag != "api" || f.Inbounds[0].Listen != "127.0.0.1" {
+		t.Errorf("api inbound not prepended with default host: %+v", f.Inbounds)
 	}
 }
