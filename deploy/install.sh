@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Cross-compile xray-panel and install it on an OpenWrt router via SSH.
 #
-# Usage:   deploy/install.sh root@192.168.1.1
+# Usage:   deploy/install.sh flint2
+# (expects an ssh alias in ~/.ssh/config; a bare root@host works too)
 #
 # The script is idempotent: it copies the binary and init script, and
 # writes /etc/xray-panel/panel.yaml from the example on the first run
@@ -11,7 +12,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-	echo "usage: $0 <ssh-target>   (e.g. root@192.168.1.1)" >&2
+	echo "usage: $0 <ssh-target>   (e.g. flint2 or root@192.168.100.1)" >&2
 	exit 2
 fi
 
