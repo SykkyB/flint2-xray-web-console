@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>xray panel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">xray panel</div>
+    <nav id="tabs">
+      <button class="tab" data-tab="clients">Clients</button>
+      <button class="tab" data-tab="server">Server</button>
+      <button class="tab" data-tab="logs">Logs</button>
+      <button class="tab" data-tab="activity">Activity</button>
+      <button class="tab" data-tab="service">Service</button>
+    </nav>
+    <div class="status" id="service-status">
+      <span class="dot" id="service-dot"></span>
+      <span id="service-text">—</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="view" data-view="clients">
+      <div class="toolbar">
+        <button class="primary" id="btn-add-client">+ Add client</button>
+        <span class="hint">Click a client to see its vless:// link and QR code.</span>
+      </div>
+      <h2>Active</h2>
+      <table class="clients">
+        <thead><tr><th>Name</th><th>UUID</th><th>Flow</th><th></th></tr></thead>
+        <tbody id="clients-active"></tbody>
+      </table>
+      <h2>Disabled</h2>
+      <table class="clients">
+        <thead><tr><th>Name</th><th>UUID</th><th>Disabled at</th><th></th></tr></thead>
+        <tbody id="clients-disabled"></tbody>
+      </table>
+    </section>
+
+    <section class="view" data-view="server">
+      <h2>Reality settings</h2>
+      <form id="form-reality">
+        <label>dest <input name="dest" type="text" placeholder="www.cloudflare.com:443"></label>
+        <label>serverNames <textarea name="serverNames" rows="2" placeholder="one per line"></textarea></label>
+        <label>shortIds <textarea name="shortIds" rows="2" placeholder="one hex string per line (even length, up to 32 chars)"></textarea></label>
+        <label>fingerprint
+          <select name="fingerprint">
+            <option value="">(unchanged)</option>
+            <option>chrome</option><option>firefox</option><option>safari</option>
+            <option>edge</option><option>random</option><option>randomized</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button class="primary" id="btn-save-reality">Save Reality</button>
+          <button type="button" id="btn-regen-keys">Regenerate X25519 keypair</button>
+          <button type="button" id="btn-enable-stats">Enable stats API</button>
+        </div>
+      </form>
+      <h3>Current server info</h3>
+      <dl id="server-info"></dl>
+    </section>
+
+    <section class="view" data-view="logs">
+      <div class="toolbar">
+        <label>Log
+          <select id="logs-which">
+            <option value="error" selected>error</option>
+            <option value="access">access</option>
+          </select>
+        </label>
+        <label>Tail <input id="logs-tail" type="number" min="10" max="5000" value="200"></label>
+        <label><input type="checkbox" id="logs-auto"> auto-refresh (5s)</label>
+        <button id="btn-refresh-logs">Refresh</button>
+        <span class="hint" id="logs-meta"></span>
+      </div>
+      <pre id="logs-body"></pre>
+    </section>
+
+    <section class="view" data-view="activity">
+      <div class="toolbar">
+        <button id="btn-refresh-activity">Refresh</button>
+        <span class="hint" id="activity-meta"></span>
+      </div>
+      <table class="activity">
+        <thead><tr><th>Client</th><th>Uplink</th><th>Downlink</th></tr></thead>
+        <tbody id="activity-body"></tbody>
+      </table>
+    </section>
+
+    <section class="view" data-view="service">
+      <p id="service-detail"></p>
+      <div class="actions">
+        <button class="primary" id="btn-svc-restart">Restart</button>
+        <button id="btn-svc-start">Start</button>
+        <button id="btn-svc-stop">Stop</button>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="client-modal">
+    <h3 id="client-modal-title"></h3>
+    <div class="qr-wrap"><img id="client-qr" alt="QR code"></div>
+    <label>vless:// link
+      <textarea id="client-link" readonly rows="3"></textarea>
+    </label>
+    <div class="actions">
+      <button id="btn-copy-link">Copy link</button>
+      <button id="btn-rename-client">Rename…</button>
+      <button id="btn-disable-client">Disable</button>
+      <button class="danger" id="btn-delete-client">Delete</button>
+      <button id="btn-close-modal" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <div id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

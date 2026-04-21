@@ -47,6 +47,7 @@ func (s *Server) Handler() nethttp.Handler {
 	s.registerServiceRoutes(mux)
 	s.registerLogRoutes(mux)
 	s.registerActivityRoute(mux)
+	s.registerUIRoutes(mux)
 	return BasicAuth(s.Cfg.Auth.Username, s.Cfg.Auth.PasswordBcrypt, mux)
 }
 
