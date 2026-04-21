@@ -44,6 +44,9 @@ func (s *Server) Handler() nethttp.Handler {
 	mux.HandleFunc("GET /api/service/status", s.handleServiceStatus)
 	s.registerClientRoutes(mux)
 	s.registerServerAdminRoutes(mux)
+	s.registerServiceRoutes(mux)
+	s.registerLogRoutes(mux)
+	s.registerActivityRoute(mux)
 	return BasicAuth(s.Cfg.Auth.Username, s.Cfg.Auth.PasswordBcrypt, mux)
 }
 
