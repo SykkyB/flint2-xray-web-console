@@ -3,7 +3,8 @@
 
 # LAN-only bind. Use the router's LAN IP, not 0.0.0.0 — the panel will
 # refuse to start if this address resolves to a WAN interface.
-listen: "192.168.100.1:8080"
+# Port 8080 on GL.iNet firmware is already taken (admin UI), so use 9092.
+listen: "192.168.100.1:9092"
 
 # What goes into generated vless:// links: the hostname or public IP
 # your clients will reach the VPN at. The port comes from the xray

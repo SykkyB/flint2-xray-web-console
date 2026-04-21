@@ -18,6 +18,9 @@ fi
 
 TARGET="$1"
 SSH_OPTS="${SSH_OPTS:--o StrictHostKeyChecking=accept-new}"
+# -O forces legacy scp1 transfer: OpenWrt's dropbear has no sftp-server,
+# and macOS's OpenSSH 9+ picks sftp by default.
+SCP_OPTS="${SCP_OPTS:--O}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$(mktemp -d)"
 BIN="$BUILD_DIR/xray-panel"
@@ -35,7 +38,7 @@ ls -la "$BIN"
 
 echo ">>> copying artifacts to $TARGET"
 # shellcheck disable=SC2086
-scp $SSH_OPTS \
+scp $SSH_OPTS $SCP_OPTS \
 	"$BIN" \
 	"$REPO_ROOT/deploy/xray-panel.init" \
 	"$REPO_ROOT/deploy/panel.example.yaml" \
@@ -46,12 +49,16 @@ echo ">>> installing on $TARGET"
 ssh $SSH_OPTS "$TARGET" /bin/sh <<'REMOTE'
 set -eu
 
-install -m 0755 /tmp/xray-panel     /usr/bin/xray-panel
-install -m 0755 /tmp/xray-panel.init /etc/init.d/xray-panel
+# OpenWrt's busybox lacks coreutils' `install`, so use cp + chmod.
+cp /tmp/xray-panel      /usr/bin/xray-panel
+chmod 0755              /usr/bin/xray-panel
+cp /tmp/xray-panel.init /etc/init.d/xray-panel
+chmod 0755              /etc/init.d/xray-panel
 
 mkdir -p /etc/xray-panel
 if [ ! -f /etc/xray-panel/panel.yaml ]; then
-	install -m 0600 /tmp/panel.example.yaml /etc/xray-panel/panel.yaml
+	cp /tmp/panel.example.yaml /etc/xray-panel/panel.yaml
+	chmod 0600                 /etc/xray-panel/panel.yaml
 	echo ">>> wrote /etc/xray-panel/panel.yaml from example — edit listen, server_address, auth.password_bcrypt before first start"
 	FIRST_INSTALL=1
 else
