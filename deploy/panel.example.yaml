@@ -1,0 +1,32 @@
+# xray-panel config. Copy to /etc/xray-panel/panel.yaml on the router
+# and edit. The panel reads this file on startup; it does not modify it.
+
+# LAN-only bind. Use the router's LAN IP, not 0.0.0.0 — the panel will
+# refuse to start if this address resolves to a WAN interface.
+listen: "192.168.1.1:8080"
+
+# What goes into generated vless:// links: the hostname or public IP
+# your clients will reach the VPN at.
+server_address: "your.domain.or.wanip"
+
+# Paths on the router. Defaults match a stock GL.iNet Flint 2 install.
+xray_config: /etc/xray/config.json
+xray_bin:    /usr/bin/xray
+xray_init:   /etc/init.d/xray
+log_error:   /tmp/xray-error.log
+log_access:  /tmp/xray-access.log
+
+# gRPC stats API endpoint. Leave empty to disable stats entirely;
+# the panel will offer a button to enable it (which patches config.json
+# and restarts xray).
+stats_api: ""
+
+# Where disabled clients live while they are out of the live xray
+# config. Re-enabling restores the same UUID.
+disabled_store: /etc/xray-panel/disabled.json
+
+auth:
+  username: admin
+  # Generate with:  htpasswd -nbBC 12 admin 'yourpassword'
+  # or:             python3 -c 'import bcrypt; print(bcrypt.hashpw(b"yourpassword", bcrypt.gensalt()).decode())'
+  password_bcrypt: "$2a$12$REPLACE_ME_WITH_A_REAL_BCRYPT_HASH_XXXXXXXXXXXXXXXXXXXXX"
