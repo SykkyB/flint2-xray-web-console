@@ -5,8 +5,9 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const state = {
   tab: 'clients',
-  data: null,        // latest /api/state snapshot
-  logsTimer: null,   // setInterval id when auto-refresh is on
+  data: null,            // latest /api/state snapshot
+  logsTimer: null,       // setInterval id when logs auto-refresh is on
+  activityTimer: null,   // setInterval id when activity auto-refresh is on
 };
 
 // ---------- networking ----------
@@ -46,6 +47,14 @@ function showTab(name) {
   $$('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
   if (name === 'logs') refreshLogs();
   if (name === 'activity') refreshActivity();
+  // Leaving activity stops its auto-refresh so it doesn't churn in the
+  // background; the checkbox is re-read on re-entry.
+  if (name !== 'activity' && state.activityTimer) {
+    clearInterval(state.activityTimer);
+    state.activityTimer = null;
+    const cb = $('#activity-auto');
+    if (cb) cb.checked = false;
+  }
 }
 $$('#tabs .tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -250,6 +259,17 @@ $('#btn-enable-stats').addEventListener('click', async () => {
     await refreshState();
   } catch (e) { toast(e.message, 'error'); }
 });
+$('#btn-enable-online').addEventListener('click', async () => {
+  if (!confirm('Enable online-user tracking? This patches policy and restarts xray.')) return;
+  try {
+    const resp = await api('POST', '/api/server/enable-online-tracking');
+    toast(resp && resp.alreadyEnabled
+      ? 'Online tracking was already enabled.'
+      : 'Online tracking enabled.');
+    await refreshState();
+    if (state.tab === 'activity') refreshActivity();
+  } catch (e) { toast(e.message, 'error'); }
+});
 
 // ---------- logs ----------
 async function refreshLogs() {
@@ -278,17 +298,42 @@ async function refreshActivity() {
       $('#activity-meta').textContent = data.message || 'Stats not enabled.';
       return;
     }
-    const n = (data.users || []).length;
-    $('#activity-meta').textContent = `${n} client${n === 1 ? '' : 's'} with traffic · cumulative since xray last started (not live connection count)`;
-    (data.users || []).sort((a, b) => (b.uplink + b.downlink) - (a.uplink + a.downlink));
-    (data.users || []).forEach(u => {
+    const users = data.users || [];
+    const n = users.length;
+    const onlineCount = users.filter(u => u.online).length;
+    let meta = `${n} client${n === 1 ? '' : 's'} with traffic · cumulative since xray last started`;
+    if (data.online_tracked) {
+      meta += ` · ${onlineCount} online now`;
+    } else {
+      meta += ' · online tracking off (Server tab → Enable online tracking)';
+    }
+    $('#activity-meta').textContent = meta;
+    // Online users float to the top; within each group, sort by total bytes desc.
+    users.sort((a, b) => {
+      if (!!b.online - !!a.online) return !!b.online - !!a.online;
+      return (b.uplink + b.downlink) - (a.uplink + a.downlink);
+    });
+    users.forEach(u => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHTML(u.email)}</td><td>${fmtBytes(u.uplink)}</td><td>${fmtBytes(u.downlink)}</td>`;
+      const dotClass = !data.online_tracked ? 'unknown' : (u.online ? 'online' : 'offline');
+      const dotTitle = !data.online_tracked
+        ? 'online tracking disabled'
+        : (u.online ? 'online' : 'offline');
+      const sessions = (data.online_tracked && u.online) ? String(u.sessions || 1) : '';
+      tr.innerHTML = `<td><span class="presence ${dotClass}" title="${dotTitle}"></span></td>` +
+        `<td>${escapeHTML(u.email)}</td>` +
+        `<td>${fmtBytes(u.uplink)}</td>` +
+        `<td>${fmtBytes(u.downlink)}</td>` +
+        `<td>${sessions}</td>`;
       tbody.appendChild(tr);
     });
   } catch (e) { toast(e.message, 'error'); }
 }
 $('#btn-refresh-activity').addEventListener('click', refreshActivity);
+$('#activity-auto').addEventListener('change', e => {
+  clearInterval(state.activityTimer); state.activityTimer = null;
+  if (e.target.checked) state.activityTimer = setInterval(refreshActivity, 5000);
+});
 
 // ---------- service ----------
 async function serviceAction(action) {

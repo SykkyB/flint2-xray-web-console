@@ -26,6 +26,7 @@ func (s *Server) registerServerAdminRoutes(mux *nethttp.ServeMux) {
 	mux.HandleFunc("PATCH /api/server/reality", s.handlePatchReality)
 	mux.HandleFunc("POST /api/server/regenerate-keys", s.handleRegenerateKeys)
 	mux.HandleFunc("POST /api/server/enable-stats", s.handleEnableStats)
+	mux.HandleFunc("POST /api/server/enable-online-tracking", s.handleEnableOnlineTracking)
 }
 
 // realityPatchReq is the body for PATCH /api/server/reality. Every
@@ -179,7 +180,7 @@ func (s *Server) handleEnableStats(w nethttp.ResponseWriter, r *nethttp.Request)
 		}
 		f.API = json.RawMessage(`{"tag":"api","services":["StatsService"]}`)
 		f.Stats = json.RawMessage(`{}`)
-		f.Policy = json.RawMessage(`{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true}},"system":{"statsInboundUplink":true,"statsInboundDownlink":true,"statsOutboundUplink":true,"statsOutboundDownlink":true}}`)
+		f.Policy = json.RawMessage(`{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}},"system":{"statsInboundUplink":true,"statsInboundDownlink":true,"statsOutboundUplink":true,"statsOutboundDownlink":true}}`)
 
 		// Append an "api -> api" routing rule, creating routing if it
 		// didn't exist. We don't parse existing rules; if the operator
@@ -232,6 +233,94 @@ func (s *Server) handleEnableStats(w nethttp.ResponseWriter, r *nethttp.Request)
 		APIAddress: target,
 		Status:     "enabled",
 	})
+}
+
+type enableOnlineResp struct {
+	AlreadyEnabled bool   `json:"alreadyEnabled"`
+	Status         string `json:"status"`
+}
+
+// handleEnableOnlineTracking flips policy.levels.0.statsUserOnline to
+// true in the xray config and restarts xray so the online-session
+// counters start flowing into the stats API. Idempotent: if the flag
+// is already set, returns alreadyEnabled=true without a restart.
+func (s *Server) handleEnableOnlineTracking(w nethttp.ResponseWriter, r *nethttp.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	// Cheap pre-read: if the flag is already on, skip the write + xray
+	// restart entirely. Otherwise run the patch through mutateConfig so
+	// the .bak / xray -test / restart flow still applies.
+	pre, err := xray.Read(s.ConfPath)
+	if err != nil {
+		writeErr(w, nethttp.StatusInternalServerError, fmt.Errorf("read config: %w", err))
+		return
+	}
+	if _, changed, err := mergeOnlineFlag(pre.Policy); err != nil {
+		writeErr(w, nethttp.StatusInternalServerError, err)
+		return
+	} else if !changed {
+		writeJSON(w, nethttp.StatusOK, enableOnlineResp{AlreadyEnabled: true, Status: "enabled"})
+		return
+	}
+
+	err = s.mutateConfig(ctx, func(f *xray.File) error {
+		merged, _, err := mergeOnlineFlag(f.Policy)
+		if err != nil {
+			return err
+		}
+		f.Policy = merged
+		return nil
+	})
+	if err != nil {
+		writeErr(w, nethttp.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, nethttp.StatusOK, enableOnlineResp{Status: "enabled"})
+}
+
+// mergeOnlineFlag parses policy, sets levels.0.statsUserOnline=true,
+// and returns the re-encoded block. Handles three cases:
+//   - policy is nil/empty: emit a fresh policy with the flag on
+//   - policy has no levels.0: add one with the flag on
+//   - policy has levels.0: merge the flag in, preserving siblings
+//
+// The second return is true iff the resulting policy differs from
+// input (used by the handler to skip a pointless xray restart).
+func mergeOnlineFlag(existing json.RawMessage) (json.RawMessage, bool, error) {
+	if len(existing) == 0 {
+		out := json.RawMessage(`{"levels":{"0":{"statsUserOnline":true}}}`)
+		return out, true, nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &root); err != nil {
+		return nil, false, fmt.Errorf("parse policy: %w", err)
+	}
+	levels := map[string]json.RawMessage{}
+	if raw, ok := root["levels"]; ok && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &levels); err != nil {
+			return nil, false, fmt.Errorf("parse policy.levels: %w", err)
+		}
+	}
+	level0 := map[string]json.RawMessage{}
+	if raw, ok := levels["0"]; ok && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &level0); err != nil {
+			return nil, false, fmt.Errorf("parse policy.levels.0: %w", err)
+		}
+	}
+	if raw, ok := level0["statsUserOnline"]; ok {
+		var b bool
+		if err := json.Unmarshal(raw, &b); err == nil && b {
+			return existing, false, nil
+		}
+	}
+	level0["statsUserOnline"] = json.RawMessage(`true`)
+	lvl0Raw, _ := json.Marshal(level0)
+	levels["0"] = lvl0Raw
+	lvlRaw, _ := json.Marshal(levels)
+	root["levels"] = lvlRaw
+	out, _ := json.Marshal(root)
+	return out, true, nil
 }
 
 // mergeRoutingRule returns a routing block that includes rule. If the

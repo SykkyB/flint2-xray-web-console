@@ -57,6 +57,7 @@
           <button class="primary" id="btn-save-reality">Save Reality</button>
           <button type="button" id="btn-regen-keys">Regenerate X25519 keypair</button>
           <button type="button" id="btn-enable-stats">Enable stats API</button>
+          <button type="button" id="btn-enable-online">Enable online tracking</button>
         </div>
       </form>
       <h3>Current server info</h3>
@@ -82,10 +83,11 @@
     <section class="view" data-view="activity">
       <div class="toolbar">
         <button id="btn-refresh-activity">Refresh</button>
+        <label><input type="checkbox" id="activity-auto"> auto-refresh (5s)</label>
         <span class="hint" id="activity-meta"></span>
       </div>
       <table class="activity">
-        <thead><tr><th>Client</th><th>Uplink</th><th>Downlink</th></tr></thead>
+        <thead><tr><th></th><th>Client</th><th>Uplink</th><th>Downlink</th><th>Sessions</th></tr></thead>
         <tbody id="activity-body"></tbody>
       </table>
     </section>

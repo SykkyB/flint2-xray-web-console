@@ -45,6 +45,11 @@ nav#tabs { display: flex; gap: .25rem; flex: 1; }
 .dot.running { background: var(--ok); }
 .dot.stopped { background: var(--danger); }
 
+.presence { width: 9px; height: 9px; border-radius: 50%; background: var(--off); display: inline-block; }
+.presence.online { background: var(--ok); box-shadow: 0 0 4px rgba(93, 187, 99, .6); }
+.presence.offline { background: var(--off); }
+.presence.unknown { background: transparent; border: 1px dashed var(--off); }
+
 main { padding: 1.25rem 1rem; max-width: 1100px; margin: 0 auto; }
 .view { display: none; }
 .view.active { display: block; }

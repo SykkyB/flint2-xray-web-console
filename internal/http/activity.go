@@ -17,15 +17,18 @@ func (s *Server) registerActivityRoute(mux *nethttp.ServeMux) {
 }
 
 type activityResp struct {
-	Enabled bool              `json:"enabled"`
-	Users   []activityUserRow `json:"users"`
-	Message string            `json:"message,omitempty"`
+	Enabled       bool              `json:"enabled"`
+	OnlineTracked bool              `json:"online_tracked"`
+	Users         []activityUserRow `json:"users"`
+	Message       string            `json:"message,omitempty"`
 }
 
 type activityUserRow struct {
 	Email    string `json:"email"`
 	Uplink   int64  `json:"uplink"`
 	Downlink int64  `json:"downlink"`
+	Online   bool   `json:"online"`
+	Sessions int    `json:"sessions"`
 }
 
 func (s *Server) handleActivity(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -58,13 +61,32 @@ func (s *Server) handleActivity(w nethttp.ResponseWriter, r *nethttp.Request) {
 		writeErr(w, nethttp.StatusInternalServerError, fmt.Errorf("query stats: %w", err))
 		return
 	}
+	// Online tracking is best-effort: it only works when
+	// policy.levels.0.statsUserOnline is on, and may not be supported on
+	// older xray builds. A failure here downgrades the response to
+	// online_tracked=false rather than blowing up the whole page.
+	onlineByEmail := map[string]int{}
+	onlineTracked := false
+	if online, err := client.QueryOnline(ctx); err == nil {
+		onlineTracked = true
+		for _, u := range online {
+			onlineByEmail[u.Email] = u.Sessions
+		}
+	}
 	rows := make([]activityUserRow, 0, len(stats))
 	for _, u := range stats {
+		sessions, on := onlineByEmail[u.Email]
 		rows = append(rows, activityUserRow{
 			Email:    u.Email,
 			Uplink:   u.Uplink,
 			Downlink: u.Downlink,
+			Online:   on && sessions > 0,
+			Sessions: sessions,
 		})
 	}
-	writeJSON(w, nethttp.StatusOK, activityResp{Enabled: true, Users: rows})
+	writeJSON(w, nethttp.StatusOK, activityResp{
+		Enabled:       true,
+		OnlineTracked: onlineTracked,
+		Users:         rows,
+	})
 }
