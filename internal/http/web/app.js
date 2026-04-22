@@ -278,7 +278,8 @@ async function refreshActivity() {
       $('#activity-meta').textContent = data.message || 'Stats not enabled.';
       return;
     }
-    $('#activity-meta').textContent = `${(data.users || []).length} active clients`;
+    const n = (data.users || []).length;
+    $('#activity-meta').textContent = `${n} client${n === 1 ? '' : 's'} with traffic · cumulative since xray last started (not live connection count)`;
     (data.users || []).sort((a, b) => (b.uplink + b.downlink) - (a.uplink + a.downlink));
     (data.users || []).forEach(u => {
       const tr = document.createElement('tr');
