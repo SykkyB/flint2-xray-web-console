@@ -29,6 +29,7 @@ RETENTION=30
 SRC_PATHS="
 /etc/xray/config.json
 /etc/xray-panel
+/etc/init.d/xray
 /etc/init.d/xray-panel
 /usr/bin/xray
 /usr/bin/xray-panel
