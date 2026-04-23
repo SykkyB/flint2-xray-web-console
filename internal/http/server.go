@@ -38,8 +38,9 @@ type Server struct {
 	// pubKey is the cached X25519 public key derived from the current
 	// realitySettings.privateKey. It is populated lazily on first use and
 	// invalidated whenever we rewrite the xray config.
-	mu     sync.Mutex
-	pubKey string
+	mu       sync.Mutex
+	pubKey   string
+	activity *activityTracker
 }
 
 // Handler returns a net/http handler with all routes registered and

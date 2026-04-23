@@ -149,6 +149,25 @@ func TestParseOnlineUsers_WrapperStringArray(t *testing.T) {
 	}
 }
 
+func TestResetUsers_Args(t *testing.T) {
+	var gotArgs []string
+	c := &StatsClient{
+		XrayBin: "/usr/bin/xray",
+		Server:  "127.0.0.1:10085",
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			gotArgs = args
+			return []byte(``), nil
+		},
+	}
+	if err := c.ResetUsers(context.Background()); err != nil {
+		t.Fatalf("ResetUsers: %v", err)
+	}
+	want := []string{"api", "statsquery", "-server", "127.0.0.1:10085", "-pattern", "user>>>", "-reset"}
+	if strings.Join(gotArgs, " ") != strings.Join(want, " ") {
+		t.Errorf("args: got %v want %v", gotArgs, want)
+	}
+}
+
 func TestQueryOnline_Args(t *testing.T) {
 	var gotArgs []string
 	c := &StatsClient{

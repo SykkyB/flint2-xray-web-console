@@ -66,6 +66,24 @@ func (c *StatsClient) QueryUsers(ctx context.Context) ([]UserStats, error) {
 	return parseStats(out)
 }
 
+// ResetUsers zeroes per-user uplink/downlink counters via
+// `xray api statsquery -server <addr> -pattern "user>>>" -reset`.
+// Safe to call while xray is running — no restart needed.
+func (c *StatsClient) ResetUsers(ctx context.Context) error {
+	if c.Server == "" {
+		return fmt.Errorf("stats server not configured")
+	}
+	run := c.Run
+	if run == nil {
+		run = DefaultRunner
+	}
+	out, err := run(ctx, c.XrayBin, "api", "statsquery", "-server", c.Server, "-pattern", "user>>>", "-reset")
+	if err != nil {
+		return fmt.Errorf("xray api statsquery -reset: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // QueryOnline runs `xray api statsgetallonlineusers --server=<addr>`
 // and returns the list of users currently holding at least one open
 // session. Requires policy.levels.*.statsUserOnline = true in the xray

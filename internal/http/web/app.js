@@ -298,14 +298,19 @@ async function refreshActivity() {
       $('#activity-meta').textContent = data.message || 'Stats not enabled.';
       return;
     }
-    const users = data.users || [];
+    const onlyOnline = $('#activity-online-only').checked;
+    let users = (data.users || []).slice();
+    if (onlyOnline) users = users.filter(u => u.online);
     const n = users.length;
-    const onlineCount = users.filter(u => u.online).length;
-    let meta = `${n} client${n === 1 ? '' : 's'} with traffic · cumulative since xray last started`;
+    const onlineCount = (data.users || []).filter(u => u.online).length;
+    let meta = `${n} client${n === 1 ? '' : 's'} shown · cumulative since xray last started`;
     if (data.online_tracked) {
       meta += ` · ${onlineCount} online now`;
     } else {
       meta += ' · online tracking off (Server tab → Enable online tracking)';
+    }
+    if (data.hidden_idle) {
+      meta += ` · ${data.hidden_idle} hidden (idle >15 min)`;
     }
     $('#activity-meta').textContent = meta;
     // Online users float to the top; within each group, sort by total bytes desc.
@@ -333,6 +338,15 @@ $('#btn-refresh-activity').addEventListener('click', refreshActivity);
 $('#activity-auto').addEventListener('change', e => {
   clearInterval(state.activityTimer); state.activityTimer = null;
   if (e.target.checked) state.activityTimer = setInterval(refreshActivity, 5000);
+});
+$('#activity-online-only').addEventListener('change', refreshActivity);
+$('#btn-reset-activity').addEventListener('click', async () => {
+  if (!confirm('Reset all per-user traffic counters? The Activity table will start fresh.')) return;
+  try {
+    await api('POST', '/api/activity/reset');
+    toast('Stats reset.');
+    refreshActivity();
+  } catch (e) { toast(e.message, 'error'); }
 });
 
 // ---------- service ----------
