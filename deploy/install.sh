@@ -42,6 +42,7 @@ scp $SSH_OPTS $SCP_OPTS \
 	"$BIN" \
 	"$REPO_ROOT/deploy/xray-panel.init" \
 	"$REPO_ROOT/deploy/panel.example.yaml" \
+	"$REPO_ROOT/deploy/xray-panel-backup" \
 	"$TARGET:/tmp/"
 
 echo ">>> installing on $TARGET"
@@ -66,7 +67,25 @@ else
 	FIRST_INSTALL=0
 fi
 
-rm -f /tmp/xray-panel /tmp/xray-panel.init /tmp/panel.example.yaml
+# Backup tool: refreshes the script + ensures the cron entry exists.
+# Backups go to /mnt/sda1/xray-backup and are content-hash gated, so
+# running the cron daily is a no-op when nothing changed.
+cp /tmp/xray-panel-backup /usr/sbin/xray-panel-backup
+chmod 0755                /usr/sbin/xray-panel-backup
+mkdir -p /mnt/sda1/xray-backup
+CRON_LINE='30 3 * * * /usr/sbin/xray-panel-backup'
+CRON_FILE=/etc/crontabs/root
+touch "$CRON_FILE"
+if ! grep -Fxq "$CRON_LINE" "$CRON_FILE"; then
+	echo "$CRON_LINE" >> "$CRON_FILE"
+	echo ">>> added daily backup to $CRON_FILE"
+	/etc/init.d/cron enable  >/dev/null 2>&1 || true
+	/etc/init.d/cron restart >/dev/null 2>&1 || true
+else
+	echo ">>> backup cron entry already present"
+fi
+
+rm -f /tmp/xray-panel /tmp/xray-panel.init /tmp/panel.example.yaml /tmp/xray-panel-backup
 
 /etc/init.d/xray-panel enable
 

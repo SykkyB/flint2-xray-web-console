@@ -1,0 +1,80 @@
+#!/bin/sh
+# xray-panel-backup — snapshot xray + panel state to /mnt/sda1/xray-backup.
+#
+# Runs under busybox ash on OpenWrt. Intended to be invoked from cron:
+# it only creates a new snapshot when something in SRC_PATHS actually
+# changed since the last run, so daily cron is cheap when idle.
+#
+# What gets backed up:
+#   /etc/xray/config.json   — xray config (clients, reality keys)
+#   /etc/xray-panel/        — panel.yaml, disabled.json
+#   /etc/init.d/xray-panel  — panel init script
+#   /usr/bin/xray           — xray binary
+#   /usr/bin/xray-panel     — panel binary
+#
+# Output layout:
+#   /mnt/sda1/xray-backup/
+#     state.sha256                  — content hash of the last snapshot
+#     snapshots/YYYY-MM-DD_HHMM.tar.gz
+#     xray-panel-backup.log         — append-only, last decisions
+
+set -eu
+
+BACKUP_ROOT=/mnt/sda1/xray-backup
+SNAP_DIR="$BACKUP_ROOT/snapshots"
+STATE_FILE="$BACKUP_ROOT/state.sha256"
+LOG_FILE="$BACKUP_ROOT/xray-panel-backup.log"
+RETENTION=30
+
+SRC_PATHS="
+/etc/xray/config.json
+/etc/xray-panel
+/etc/init.d/xray-panel
+/usr/bin/xray
+/usr/bin/xray-panel
+"
+
+log() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG_FILE"
+}
+
+mkdir -p "$SNAP_DIR"
+
+# Content hash: every present file under SRC_PATHS, sorted, sha256'd
+# individually, then the whole listing is hashed. Additions / deletions
+# / content changes all perturb it; mtime changes do not.
+hash_current() {
+	for p in $SRC_PATHS; do
+		[ -e "$p" ] || continue
+		find "$p" -type f 2>/dev/null
+	done | sort | xargs -r sha256sum | sha256sum | awk '{print $1}'
+}
+
+CURRENT_HASH=$(hash_current)
+PREV_HASH=""
+[ -f "$STATE_FILE" ] && PREV_HASH=$(cat "$STATE_FILE")
+
+if [ "$CURRENT_HASH" = "$PREV_HASH" ]; then
+	log "no changes (hash=$CURRENT_HASH)"
+	exit 0
+fi
+
+STAMP=$(date '+%Y-%m-%d_%H%M')
+OUT="$SNAP_DIR/$STAMP.tar.gz"
+
+# Build a list of paths that actually exist; tar fails otherwise.
+TAR_PATHS=""
+for p in $SRC_PATHS; do
+	[ -e "$p" ] && TAR_PATHS="$TAR_PATHS $p"
+done
+# shellcheck disable=SC2086
+tar -czf "$OUT" $TAR_PATHS 2>>"$LOG_FILE"
+
+echo "$CURRENT_HASH" > "$STATE_FILE"
+log "snapshot $OUT (hash=$CURRENT_HASH)"
+
+# Retention: delete oldest beyond RETENTION.
+ls -1t "$SNAP_DIR"/*.tar.gz 2>/dev/null | awk -v n="$RETENTION" 'NR>n' | while read -r old; do
+	rm -f "$old"
+	log "pruned $old"
+done
