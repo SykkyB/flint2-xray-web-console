@@ -6,11 +6,15 @@
 # changed since the last run, so daily cron is cheap when idle.
 #
 # What gets backed up:
-#   /etc/xray/config.json   — xray config (clients, reality keys)
-#   /etc/xray-panel/        — panel.yaml, disabled.json
-#   /etc/init.d/xray-panel  — panel init script
-#   /usr/bin/xray           — xray binary
-#   /usr/bin/xray-panel     — panel binary
+#   /etc/xray/config.json         — xray config (clients, reality keys)
+#   /etc/xray-panel/              — panel.yaml, disabled.json
+#   /etc/config/xray              — UCI wrapper (confdir, datadir, enabled)
+#   /etc/init.d/xray              — xray init script
+#   /etc/init.d/xray-panel        — panel init script
+#   /usr/bin/xray                 — xray binary
+#   /usr/bin/xray-panel           — panel binary
+#   /www/xray-panel-launcher.js   — sidebar launcher injected into GL.iNet UI
+#   /www/gl_home.html.bak         — pristine pre-launcher gl_home (for revert)
 #
 # Output layout:
 #   /mnt/sda1/xray-backup/
@@ -29,10 +33,13 @@ RETENTION=30
 SRC_PATHS="
 /etc/xray/config.json
 /etc/xray-panel
+/etc/config/xray
 /etc/init.d/xray
 /etc/init.d/xray-panel
 /usr/bin/xray
 /usr/bin/xray-panel
+/www/xray-panel-launcher.js
+/www/gl_home.html.bak
 "
 
 log() {

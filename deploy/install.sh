@@ -43,6 +43,7 @@ scp $SSH_OPTS $SCP_OPTS \
 	"$REPO_ROOT/deploy/xray-panel.init" \
 	"$REPO_ROOT/deploy/panel.example.yaml" \
 	"$REPO_ROOT/deploy/xray-panel-backup" \
+	"$REPO_ROOT/router/www/xray-panel-launcher.js" \
 	"$TARGET:/tmp/"
 
 echo ">>> installing on $TARGET"
@@ -55,6 +56,26 @@ cp /tmp/xray-panel      /usr/bin/xray-panel
 chmod 0755              /usr/bin/xray-panel
 cp /tmp/xray-panel.init /etc/init.d/xray-panel
 chmod 0755              /etc/init.d/xray-panel
+
+# Sidebar launcher injected into the GL.iNet stock admin UI
+# (/www/gl_home.html). One-time .bak of the original; idempotent
+# re-patch on every install — looks for the marker before inserting.
+# Firmware updates that rewrite gl_home.html will undo the patch;
+# re-running this installer puts it back.
+cp /tmp/xray-panel-launcher.js /www/xray-panel-launcher.js
+chmod 0644                     /www/xray-panel-launcher.js
+if [ -f /www/gl_home.html ]; then
+	[ -f /www/gl_home.html.bak ] || cp /www/gl_home.html /www/gl_home.html.bak
+	if ! grep -q xray-panel-launcher /www/gl_home.html; then
+		# Insert before </body>; busybox sed doesn't grok newlines in
+		# replacements, so the script tag goes inline on the same line.
+		sed -i 's|</body>|<script src="/xray-panel-launcher.js" defer></script></body>|' \
+			/www/gl_home.html
+		echo ">>> patched /www/gl_home.html (sidebar launcher); .bak preserved"
+	else
+		echo ">>> /www/gl_home.html already patched"
+	fi
+fi
 
 mkdir -p /etc/xray-panel
 if [ ! -f /etc/xray-panel/panel.yaml ]; then
@@ -85,7 +106,7 @@ else
 	echo ">>> backup cron entry already present"
 fi
 
-rm -f /tmp/xray-panel /tmp/xray-panel.init /tmp/panel.example.yaml /tmp/xray-panel-backup
+rm -f /tmp/xray-panel /tmp/xray-panel.init /tmp/panel.example.yaml /tmp/xray-panel-backup /tmp/xray-panel-launcher.js
 
 /etc/init.d/xray-panel enable
 
