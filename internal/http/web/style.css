@@ -258,14 +258,24 @@ dl#server-info dd { margin: 0; font-family: var(--mono); font-size: 13px; word-b
 dialog {
   background: var(--card); color: var(--fg);
   border: 1px solid var(--border); border-radius: 8px;
-  max-width: 420px; width: calc(100% - 2rem); padding: 1rem;
+  max-width: 540px; width: calc(100% - 2rem); padding: 1rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 dialog::backdrop { background: rgba(0,0,0,0.5); }
 dialog h3 { margin-top: 0; }
 dialog .qr-wrap { text-align: center; margin: .5rem 0 1rem; }
 dialog .qr-wrap img { width: 240px; height: 240px; background: #fff; border-radius: 6px; }
-dialog textarea { font-family: var(--mono); font-size: 12px; }
+dialog label { display: block; margin-bottom: .75rem; }
+dialog textarea {
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  width: 100%; margin-top: .35rem;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: .55rem .65rem;
+  /* Long vless:// URLs must wrap by character — they have no spaces. */
+  white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere;
+  resize: vertical; min-height: 5.5rem;
+}
 
 #toast {
   position: fixed; bottom: 1rem; right: 1rem;

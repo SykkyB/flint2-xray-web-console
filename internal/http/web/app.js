@@ -213,8 +213,31 @@ async function openClientModal(client) {
 }
 $('#btn-close-modal').addEventListener('click', () => $('#client-modal').close());
 $('#btn-copy-link').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText($('#client-link').value); toast('Link copied.'); }
-  catch (e) { toast('Clipboard unavailable.', 'error'); }
+  // navigator.clipboard requires a secure context (HTTPS or localhost).
+  // On plain http://192.168.100.1:9092 it isn't available, so fall back
+  // to selection + execCommand('copy') which still works on every browser
+  // when the textarea is in the DOM and visible.
+  const ta = $('#client-link');
+  try {
+    if (window.isSecureContext && navigator.clipboard) {
+      await navigator.clipboard.writeText(ta.value);
+      toast('Link copied.');
+      return;
+    }
+  } catch (_) { /* fall through to legacy path */ }
+  try {
+    ta.removeAttribute('readonly');
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    ta.setAttribute('readonly', '');
+    ta.blur();
+    toast(ok ? 'Link copied.' : 'Could not copy — select text manually.',
+          ok ? 'info' : 'error');
+  } catch (e) {
+    toast('Clipboard unavailable — select the text manually.', 'error');
+  }
 });
 
 async function renameClient(client) {
