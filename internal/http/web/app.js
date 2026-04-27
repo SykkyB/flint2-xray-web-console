@@ -6,7 +6,6 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const state = {
   tab: 'clients',
   data: null,            // latest /api/state snapshot
-  logsTimer: null,       // setInterval id when logs auto-refresh is on
   activityTimer: null,   // setInterval id when activity auto-refresh is on
 };
 
@@ -53,6 +52,13 @@ function showTab(name) {
     clearInterval(state.activityTimer);
     state.activityTimer = null;
     const cb = $('#activity-auto');
+    if (cb) cb.checked = false;
+  }
+  // Same idea for the logs SSE — leaving the tab tears the stream down
+  // so the panel isn't holding open a procd-tail goroutine for nothing.
+  if (name !== 'logs') {
+    stopLogsStream();
+    const cb = $('#logs-auto');
     if (cb) cb.checked = false;
   }
 }
@@ -272,7 +278,37 @@ $('#btn-enable-online').addEventListener('click', async () => {
 });
 
 // ---------- logs ----------
+// Two modes: snapshot tail (manual refresh) and live SSE stream
+// (auto-refresh checkbox). The SSE endpoint pre-fills with `?backfill=N`
+// so toggling Live gives the same window the snapshot would have.
+let logsES = null;
+
+function stopLogsStream() {
+  if (logsES) { logsES.close(); logsES = null; }
+}
+
+function startLogsStream() {
+  stopLogsStream();
+  const which = $('#logs-which').value;
+  const tail = parseInt($('#logs-tail').value, 10) || 200;
+  $('#logs-body').textContent = '';
+  $('#logs-meta').textContent = `live (${which}, last ${tail})`;
+  const url = `/api/logs/${encodeURIComponent(which)}/stream?backfill=${tail}`;
+  logsES = new EventSource(url, { withCredentials: true });
+  logsES.onmessage = ev => {
+    const body = $('#logs-body');
+    body.textContent += (body.textContent ? '\n' : '') + ev.data;
+    body.scrollTop = body.scrollHeight;
+  };
+  logsES.onerror = () => {
+    // EventSource auto-reconnects; surface a one-shot toast then let it.
+    $('#logs-meta').textContent = `live (${which}) — reconnecting…`;
+  };
+}
+
 async function refreshLogs() {
+  // Snapshot fetch — used when Live is OFF, or when changing log/tail
+  // while Live is still negotiating its first event.
   const which = $('#logs-which').value;
   const tail = $('#logs-tail').value || 200;
   try {
@@ -281,11 +317,18 @@ async function refreshLogs() {
     $('#logs-meta').textContent = data.path + (data.truncated ? ' (window truncated)' : '');
   } catch (e) { toast(e.message, 'error'); }
 }
-$('#btn-refresh-logs').addEventListener('click', refreshLogs);
-$('#logs-which').addEventListener('change', refreshLogs);
+$('#btn-refresh-logs').addEventListener('click', () => {
+  stopLogsStream();
+  $('#logs-auto').checked = false;
+  refreshLogs();
+});
+$('#logs-which').addEventListener('change', () => {
+  if ($('#logs-auto').checked) startLogsStream();
+  else refreshLogs();
+});
 $('#logs-auto').addEventListener('change', e => {
-  clearInterval(state.logsTimer); state.logsTimer = null;
-  if (e.target.checked) state.logsTimer = setInterval(refreshLogs, 5000);
+  if (e.target.checked) startLogsStream();
+  else stopLogsStream();
 });
 
 // ---------- activity ----------
