@@ -3,12 +3,12 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	nethttp "net/http"
 	"sync"
 	"time"
 
 	"flint2-xray-web-console/internal/config"
+	"flint2-xray-web-console/internal/logs"
 	"flint2-xray-web-console/internal/service"
 	"flint2-xray-web-console/internal/store"
 	"flint2-xray-web-console/internal/xray"
@@ -41,11 +41,33 @@ type Server struct {
 	mu       sync.Mutex
 	pubKey   string
 	activity *activityTracker
+
+	// stateCache is a single-flight cache around handleState, initialised
+	// in Handler(). nil means caching is disabled (defensive: handlers
+	// fall back to a direct collect when nil).
+	stateCache *stateCache
+
+	// LogHubs is keyed by which ("error" / "access") and shares one
+	// tailer goroutine per file across all SSE subscribers. Initialised
+	// in Handler() from Cfg.LogError / Cfg.LogAccess.
+	LogHubs map[string]*logs.Hub
 }
 
 // Handler returns a net/http handler with all routes registered and
 // basic-auth applied.
 func (s *Server) Handler() nethttp.Handler {
+	if s.stateCache == nil {
+		s.stateCache = &stateCache{}
+	}
+	if s.LogHubs == nil {
+		s.LogHubs = map[string]*logs.Hub{}
+		if s.Cfg.LogError != "" {
+			s.LogHubs["error"] = logs.NewHub(s.Cfg.LogError)
+		}
+		if s.Cfg.LogAccess != "" {
+			s.LogHubs["access"] = logs.NewHub(s.Cfg.LogAccess)
+		}
+	}
 	mux := nethttp.NewServeMux()
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/service/status", s.handleServiceStatus)
@@ -124,87 +146,6 @@ type clientBlock struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Flow string `json:"flow,omitempty"`
-}
-
-func (s *Server) handleState(w nethttp.ResponseWriter, r *nethttp.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	f, err := xray.Read(s.ConfPath)
-	if err != nil {
-		writeErr(w, nethttp.StatusInternalServerError, fmt.Errorf("read xray config: %w", err))
-		return
-	}
-	in, err := f.PrimaryInbound()
-	if err != nil {
-		writeErr(w, nethttp.StatusInternalServerError, err)
-		return
-	}
-
-	resp := stateResponse{
-		ServerAddress: s.Cfg.ServerAddress,
-		Server: serverBlock{
-			Listen: in.Listen,
-			Port:   parsePort(in.Port),
-			Flow:   primaryFlow(in),
-		},
-		StatsAPIEnabled: f.API != nil && f.Stats != nil,
-	}
-
-	if in.StreamSettings != nil && in.StreamSettings.RealitySettings != nil {
-		rs := in.StreamSettings.RealitySettings
-		rb := realityBlock{
-			Dest:        rs.Dest,
-			ServerNames: rs.ServerNames,
-			ShortIDs:    rs.ShortIDs,
-			Fingerprint: rs.Fingerprint,
-			HasPrivate:  rs.PrivateKey != "",
-		}
-		if rs.PrivateKey != "" {
-			pub, err := s.publicKey(ctx, rs.PrivateKey)
-			if err != nil {
-				resp.Warnings = append(resp.Warnings, fmt.Sprintf("derive public key: %v", err))
-			} else {
-				rb.PublicKey = pub
-			}
-		}
-		resp.Server.Reality = rb
-	}
-
-	if in.Settings != nil {
-		for _, c := range in.Settings.Clients {
-			resp.Clients = append(resp.Clients, clientBlock{
-				ID:   c.ID,
-				Name: c.Email,
-				Flow: c.Flow,
-			})
-		}
-	}
-
-	if s.Disabled != nil {
-		disabled, err := s.Disabled.List()
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, fmt.Sprintf("disabled store: %v", err))
-		} else {
-			for _, d := range disabled {
-				resp.Disabled = append(resp.Disabled, disabledClientBlock{
-					ID:         d.Client.ID,
-					Name:       d.Client.Email,
-					Flow:       d.Client.Flow,
-					DisabledAt: d.DisabledAt,
-				})
-			}
-		}
-	}
-
-	st, err := s.Service.Status(ctx)
-	if err != nil {
-		resp.Warnings = append(resp.Warnings, fmt.Sprintf("service status: %v", err))
-	} else {
-		resp.Service = st
-	}
-
-	writeJSON(w, nethttp.StatusOK, resp)
 }
 
 func (s *Server) handleServiceStatus(w nethttp.ResponseWriter, r *nethttp.Request) {

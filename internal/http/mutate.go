@@ -41,5 +41,8 @@ func (s *Server) mutateConfig(ctx context.Context, fn func(*xray.File) error) er
 	if err := s.Service.Restart(ctx); err != nil {
 		return fmt.Errorf("restart xray: %w", err)
 	}
+	// Drop the cached /api/state so the next poll reflects the mutation
+	// instead of waiting up to stateCacheTTL.
+	s.invalidateState()
 	return nil
 }
