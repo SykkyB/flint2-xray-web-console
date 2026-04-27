@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"flint2-xray-web-console/internal/runner"
 	"flint2-xray-web-console/internal/xray"
 )
 
@@ -85,7 +86,7 @@ func TestRegenerateKeys(t *testing.T) {
 	// while other xray calls still answer correctly.
 	env.Srv.Keys = &xray.KeyTool{
 		XrayBin: env.Srv.Cfg.XrayBin,
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			if len(args) > 0 && args[0] == "x25519" && len(args) == 1 {
 				return []byte("Private key: NEW_PRIV\nPublic key: NEW_PUB\n"), nil
 			}
@@ -93,7 +94,7 @@ func TestRegenerateKeys(t *testing.T) {
 				return []byte("Public key: DERIVED_FROM_" + args[2] + "\n"), nil
 			}
 			return []byte("Configuration OK."), nil
-		},
+		}),
 	}
 	// Prime the public key cache so we can verify invalidation.
 	if _, err := env.Srv.publicKey(context.Background(), "FAKE_PRIVATE_KEY"); err != nil {

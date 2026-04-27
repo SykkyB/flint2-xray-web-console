@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"flint2-xray-web-console/internal/runner"
 )
 
 // StatsClient wraps `xray api statsquery`. It shells out via the same
-// Runner as KeyTool, which lets tests supply deterministic output.
+// runner.Runner as KeyTool, which lets tests supply deterministic output.
 type StatsClient struct {
 	XrayBin string
 	// Server is the host:port of xray's gRPC stats API, as advertised
 	// by panel.yaml's stats_api.
 	Server string
-	Run    Runner
+	Run    runner.Runner
 }
 
 // UserStats is a single client's uplink/downlink byte totals since the
@@ -55,15 +57,29 @@ func (c *StatsClient) QueryUsers(ctx context.Context) ([]UserStats, error) {
 	if c.Server == "" {
 		return nil, fmt.Errorf("stats server not configured")
 	}
-	run := c.Run
-	if run == nil {
-		run = DefaultRunner
-	}
-	out, err := run(ctx, c.XrayBin, "api", "statsquery", "-server", c.Server, "-pattern", "user>>>")
+	out, err := c.shell(ctx, "api", "statsquery", "-server", c.Server, "-pattern", "user>>>")
 	if err != nil {
 		return nil, fmt.Errorf("xray api statsquery: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return parseStats(out)
+}
+
+// shell runs xrayBin with the supplied args via c.Run (defaulting to
+// runner.Exec) and returns whichever of stdout/stderr is non-empty.
+// xray's CLI prints results on stdout and diagnostics on stderr; we
+// fall back to stderr only when stdout is empty so error messages
+// surface usefully without polluting parsed output.
+func (c *StatsClient) shell(ctx context.Context, args ...string) ([]byte, error) {
+	r := c.Run
+	if r == nil {
+		r = runner.Exec{}
+	}
+	stdout, stderr, err := r.Run(ctx, c.XrayBin, args...)
+	out := stdout
+	if len(out) == 0 {
+		out = stderr
+	}
+	return out, err
 }
 
 // ResetUsers zeroes per-user uplink/downlink counters via
@@ -73,11 +89,7 @@ func (c *StatsClient) ResetUsers(ctx context.Context) error {
 	if c.Server == "" {
 		return fmt.Errorf("stats server not configured")
 	}
-	run := c.Run
-	if run == nil {
-		run = DefaultRunner
-	}
-	out, err := run(ctx, c.XrayBin, "api", "statsquery", "-server", c.Server, "-pattern", "user>>>", "-reset")
+	out, err := c.shell(ctx, "api", "statsquery", "-server", c.Server, "-pattern", "user>>>", "-reset")
 	if err != nil {
 		return fmt.Errorf("xray api statsquery -reset: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -92,11 +104,7 @@ func (c *StatsClient) QueryOnline(ctx context.Context) ([]OnlineUser, error) {
 	if c.Server == "" {
 		return nil, fmt.Errorf("stats server not configured")
 	}
-	run := c.Run
-	if run == nil {
-		run = DefaultRunner
-	}
-	out, err := run(ctx, c.XrayBin, "api", "statsgetallonlineusers", "--server="+c.Server)
+	out, err := c.shell(ctx, "api", "statsgetallonlineusers", "--server="+c.Server)
 	if err != nil {
 		return nil, fmt.Errorf("xray api statsgetallonlineusers: %w: %s", err, strings.TrimSpace(string(out)))
 	}

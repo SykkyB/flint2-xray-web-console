@@ -3,8 +3,8 @@
 // config itself — it only starts/stops/restarts the service and asks
 // xray whether a given config file would load.
 //
-// The exec-ing is routed through a pluggable Runner so tests can exercise
-// the package without actually invoking init.d.
+// The exec-ing is routed through a pluggable runner.Runner so tests can
+// exercise the package without actually invoking init.d.
 package service
 
 import (
@@ -14,16 +14,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"flint2-xray-web-console/internal/runner"
 )
-
-// Runner executes a command and returns combined stdout+stderr plus the
-// error. The default uses exec.CommandContext; tests inject a fake.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
-// DefaultRunner shells out via os/exec.
-func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
 
 // Manager drives `/etc/init.d/xray` and `xray -test`. Paths come from
 // the panel config and are not hardcoded.
@@ -35,8 +28,8 @@ type Manager struct {
 	// Timeout applies to each shell-out. Zero means no per-call timeout.
 	Timeout time.Duration
 
-	// Run is the command executor. Defaults to DefaultRunner.
-	Run Runner
+	// Run is the command executor. Defaults to runner.Exec.
+	Run runner.Runner
 }
 
 // State is a coarse view of the service: either it's running or it isn't,
@@ -58,9 +51,9 @@ func (m *Manager) Validate(ctx context.Context, path string) error {
 	}
 	ctx, cancel := m.withTimeout(ctx)
 	defer cancel()
-	out, err := m.runner()(ctx, m.XrayBin, "-test", "-config", path)
+	stdout, stderr, err := m.runner().Run(ctx, m.XrayBin, "-test", "-config", path)
 	if err != nil {
-		return fmt.Errorf("xray -test rejected %s: %s", path, firstLine(out))
+		return fmt.Errorf("xray -test rejected %s: %s", path, firstLine(combine(stdout, stderr)))
 	}
 	return nil
 }
@@ -71,8 +64,8 @@ func (m *Manager) Validate(ctx context.Context, path string) error {
 func (m *Manager) Status(ctx context.Context) (State, error) {
 	ctx, cancel := m.withTimeout(ctx)
 	defer cancel()
-	out, err := m.runner()(ctx, m.InitScript, "status")
-	raw := strings.TrimSpace(string(out))
+	stdout, stderr, err := m.runner().Run(ctx, m.InitScript, "status")
+	raw := strings.TrimSpace(string(combine(stdout, stderr)))
 	if err != nil {
 		// Non-zero exit typically means "not running"; surface raw so the
 		// UI can show whatever procd said.
@@ -117,18 +110,18 @@ func (m *Manager) RestartWithoutValidation(ctx context.Context) error {
 func (m *Manager) initAction(ctx context.Context, action string) error {
 	ctx, cancel := m.withTimeout(ctx)
 	defer cancel()
-	out, err := m.runner()(ctx, m.InitScript, action)
+	stdout, stderr, err := m.runner().Run(ctx, m.InitScript, action)
 	if err != nil {
-		return fmt.Errorf("%s: %s: %w", action, firstLine(out), err)
+		return fmt.Errorf("%s: %s: %w", action, firstLine(combine(stdout, stderr)), err)
 	}
 	return nil
 }
 
-func (m *Manager) runner() Runner {
+func (m *Manager) runner() runner.Runner {
 	if m.Run != nil {
 		return m.Run
 	}
-	return DefaultRunner
+	return runner.Exec{}
 }
 
 func (m *Manager) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -136,6 +129,16 @@ func (m *Manager) withTimeout(ctx context.Context) (context.Context, context.Can
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, m.Timeout)
+}
+
+// combine returns stderr if non-empty, else stdout. Most external tools
+// that we care about print diagnostics on stderr; falling back to stdout
+// covers init scripts that mix the two.
+func combine(stdout, stderr []byte) []byte {
+	if len(stderr) > 0 {
+		return stderr
+	}
+	return stdout
 }
 
 func firstLine(b []byte) string {

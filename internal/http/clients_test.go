@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"flint2-xray-web-console/internal/config"
+	"flint2-xray-web-console/internal/runner"
 	"flint2-xray-web-console/internal/service"
 	"flint2-xray-web-console/internal/store"
 	"flint2-xray-web-console/internal/xray"
@@ -56,7 +57,7 @@ func newClientTestEnv(t *testing.T) *clientTestEnv {
 	}
 
 	// Fake runner routes by binary: xray → test/x25519, initscript → actions.
-	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	run := runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case cfg.XrayBin:
 			if len(args) > 0 && args[0] == "-test" {
@@ -74,7 +75,7 @@ func newClientTestEnv(t *testing.T) *clientTestEnv {
 			return []byte(""), nil
 		}
 		return []byte(""), nil
-	}
+	})
 
 	env.Srv = &Server{
 		Cfg:      cfg,

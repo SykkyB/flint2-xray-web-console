@@ -120,18 +120,13 @@ func (s *Server) handleActivity(w nethttp.ResponseWriter, r *nethttp.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	// service.Runner and xray.Runner share the same underlying function
-	// type; the explicit conversion keeps the types distinct at the
-	// package boundary while letting us reuse the Service manager's
-	// executor (and its fake in tests).
-	var run xray.Runner
-	if s.Service.Run != nil {
-		run = xray.Runner(s.Service.Run)
-	}
+	// Re-use the Service manager's executor (and its fake in tests) so
+	// the StatsClient shells out through the same runner.Runner wired
+	// into Manager.
 	client := &xray.StatsClient{
 		XrayBin: s.Cfg.XrayBin,
 		Server:  s.Cfg.StatsAPI,
-		Run:     run,
+		Run:     s.Service.Run,
 	}
 	stats, err := client.QueryUsers(ctx)
 	if err != nil {
@@ -187,14 +182,10 @@ func (s *Server) handleActivityReset(w nethttp.ResponseWriter, r *nethttp.Reques
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	var run xray.Runner
-	if s.Service.Run != nil {
-		run = xray.Runner(s.Service.Run)
-	}
 	client := &xray.StatsClient{
 		XrayBin: s.Cfg.XrayBin,
 		Server:  s.Cfg.StatsAPI,
-		Run:     run,
+		Run:     s.Service.Run,
 	}
 	if err := client.ResetUsers(ctx); err != nil {
 		writeErr(w, nethttp.StatusInternalServerError, fmt.Errorf("reset stats: %w", err))

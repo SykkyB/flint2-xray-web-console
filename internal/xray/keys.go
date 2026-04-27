@@ -3,26 +3,18 @@ package xray
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
+
+	"flint2-xray-web-console/internal/runner"
 )
 
-// Runner is the command executor used for shelling out to the xray binary.
-// Tests inject a fake; production code passes DefaultRunner.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
-
-// DefaultRunner shells out via os/exec.
-func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
-// KeyTool wraps `xray x25519`. Its zero value uses DefaultRunner and no
+// KeyTool wraps `xray x25519`. Its zero value uses runner.Exec and no
 // per-call timeout.
 type KeyTool struct {
 	XrayBin string
-	Run     Runner
+	Run     runner.Runner
 	Timeout time.Duration
 }
 
@@ -71,18 +63,26 @@ func (k *KeyTool) exec(ctx context.Context, extra ...string) ([]byte, error) {
 		ctx, cancel = context.WithTimeout(ctx, k.Timeout)
 		defer cancel()
 	}
-	run := k.Run
-	if run == nil {
-		run = DefaultRunner
+	r := k.Run
+	if r == nil {
+		r = runner.Exec{}
 	}
 	args := append([]string{"x25519"}, extra...)
-	return run(ctx, k.XrayBin, args...)
+	stdout, stderr, err := r.Run(ctx, k.XrayBin, args...)
+	// xray prints the keys on stdout; stderr is for warnings/errors. Fall
+	// back to stderr when stdout is empty so callers see something useful.
+	out := stdout
+	if len(out) == 0 {
+		out = stderr
+	}
+	return out, err
 }
 
 // Labels vary between xray versions:
 //   - pre-1.8.x:   "Private key: …"     / "Public key: …"
 //   - 1.8.x–25.x:  "Private key: …"     / "Public key: …"      (+ extra Hash32/Password lines)
 //   - 26.x:        "PrivateKey: …"      / "Password (PublicKey): …"
+//
 // These regexes accept the union so the panel works across versions.
 var (
 	privKeyRe = regexp.MustCompile(`(?mi)^\s*Private\s*key\s*:\s*(\S+)`)

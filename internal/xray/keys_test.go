@@ -4,12 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"flint2-xray-web-console/internal/runner"
 )
 
-func fakeRunner(out string, err error) Runner {
-	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+func fakeRunner(out string, err error) runner.Runner {
+	return runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte(out), err
-	}
+	})
 }
 
 func TestGenerate(t *testing.T) {
@@ -62,10 +64,10 @@ func TestDerivePublic_CallArgs(t *testing.T) {
 	var gotArgs []string
 	k := &KeyTool{
 		XrayBin: "/usr/bin/xray",
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			gotArgs = args
 			return []byte("Public key: DERIVED"), nil
-		},
+		}),
 	}
 	pub, err := k.DerivePublic(context.Background(), "SOME_PRIV")
 	if err != nil {

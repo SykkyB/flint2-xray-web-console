@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"flint2-xray-web-console/internal/runner"
 	"flint2-xray-web-console/internal/xray"
 )
 
@@ -144,7 +145,7 @@ func TestActivity_Enabled(t *testing.T) {
 	env.Srv.Cfg.StatsAPI = "127.0.0.1:10085"
 	// Route `xray api statsquery …` through a dedicated fake via the
 	// service.Manager runner — that's what activity uses in production.
-	env.Srv.Service.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	env.Srv.Service.Run = runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if len(args) >= 2 && args[0] == "api" && args[1] == "statsquery" {
 			return []byte(`{"stat":[
 				{"name":"user>>>alice>>>traffic>>>uplink","value":"1000"},
@@ -153,7 +154,7 @@ func TestActivity_Enabled(t *testing.T) {
 			]}`), nil
 		}
 		return []byte(""), nil
-	}
+	})
 
 	w := do(env.Srv.Handler(), "GET", "/api/activity", nil)
 	if w.Code != nethttp.StatusOK {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"flint2-xray-web-console/internal/runner"
 )
 
 func TestParseStats_StringValues(t *testing.T) {
@@ -54,10 +56,10 @@ func TestQueryUsers_Args(t *testing.T) {
 	c := &StatsClient{
 		XrayBin: "/usr/bin/xray",
 		Server:  "127.0.0.1:10085",
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			gotArgs = args
 			return []byte(`{"stat":[]}`), nil
-		},
+		}),
 	}
 	if _, err := c.QueryUsers(context.Background()); err != nil {
 		t.Fatalf("QueryUsers: %v", err)
@@ -154,10 +156,10 @@ func TestResetUsers_Args(t *testing.T) {
 	c := &StatsClient{
 		XrayBin: "/usr/bin/xray",
 		Server:  "127.0.0.1:10085",
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			gotArgs = args
 			return []byte(``), nil
-		},
+		}),
 	}
 	if err := c.ResetUsers(context.Background()); err != nil {
 		t.Fatalf("ResetUsers: %v", err)
@@ -173,10 +175,10 @@ func TestQueryOnline_Args(t *testing.T) {
 	c := &StatsClient{
 		XrayBin: "/usr/bin/xray",
 		Server:  "127.0.0.1:10085",
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			gotArgs = args
 			return []byte(`{}`), nil
-		},
+		}),
 	}
 	if _, err := c.QueryOnline(context.Background()); err != nil {
 		t.Fatalf("QueryOnline: %v", err)

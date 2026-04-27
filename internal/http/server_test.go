@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"flint2-xray-web-console/internal/config"
+	"flint2-xray-web-console/internal/runner"
 	"flint2-xray-web-console/internal/service"
 	"flint2-xray-web-console/internal/xray"
 )
@@ -70,13 +71,13 @@ func newTestServer(t *testing.T) (*Server, string) {
 	}
 
 	// Fake xray key derivation: returns a deterministic public key.
-	keyRun := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	keyRun := runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("Public key: DERIVED_PUBKEY\n"), nil
-	}
+	})
 	// Fake service runner: reports "running".
-	svcRun := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	svcRun := runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return []byte("running"), nil
-	}
+	})
 
 	srv := &Server{
 		Cfg:      cfg,
@@ -156,10 +157,10 @@ func TestPublicKeyCaching(t *testing.T) {
 	calls := 0
 	srv.Keys = &xray.KeyTool{
 		XrayBin: "/usr/bin/xray",
-		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		Run: runner.CombinedFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			calls++
 			return []byte("Public key: CACHED\n"), nil
-		},
+		}),
 	}
 
 	for i := 0; i < 3; i++ {
