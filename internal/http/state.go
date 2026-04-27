@@ -131,7 +131,8 @@ func (s *Server) collectState(ctx context.Context) stateResponse {
 			Port:   parsePort(in.Port),
 			Flow:   primaryFlow(in),
 		},
-		StatsAPIEnabled: f.API != nil && f.Stats != nil,
+		StatsAPIEnabled:       f.API != nil && f.Stats != nil,
+		OnlineTrackingEnabled: policyHasOnlineFlag(f.Policy),
 	}
 
 	if in.StreamSettings != nil && in.StreamSettings.RealitySettings != nil {

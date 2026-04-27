@@ -90,16 +90,29 @@ async function refreshState() {
     toast(e.message, 'error');
   }
 }
+function setPill(el, text, kind) {
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('pill-ok', 'pill-bad', 'pill-warn', 'pill-muted', 'pill-info');
+  el.classList.add(`pill-${kind || 'muted'}`);
+}
 function paintServiceStatus(svc) {
   const dot = $('#service-dot'), txt = $('#service-text'), det = $('#service-detail');
   dot.classList.remove('running', 'stopped');
   if (svc && svc.Running) { dot.classList.add('running'); txt.textContent = 'xray running'; }
   else { dot.classList.add('stopped'); txt.textContent = 'xray stopped'; }
   if (det) det.textContent = svc && svc.Raw ? svc.Raw : '';
+  // Service-tab pill mirrors the header status using the OK/BAD palette.
+  setPill($('#svc-pill'), svc && svc.Running ? 'running' : 'stopped',
+          svc && svc.Running ? 'ok' : 'bad');
 }
 function paintClients(data) {
   const active = $('#clients-active'), disabled = $('#clients-disabled');
   active.innerHTML = ''; disabled.innerHTML = '';
+  const activeCount = (data.clients || []).length;
+  const disabledCount = (data.disabled || []).length;
+  setPill($('#clients-active-count'), String(activeCount), activeCount > 0 ? 'info' : 'muted');
+  setPill($('#clients-disabled-count'), String(disabledCount), disabledCount > 0 ? 'warn' : 'muted');
   (data.clients || []).forEach(c => {
     const tr = document.createElement('tr');
     tr.className = 'clickable';
@@ -107,7 +120,7 @@ function paintClients(data) {
     tr.innerHTML = `<td>${escapeHTML(c.name || '(unnamed)')}</td>
       <td><span class="uuid">${escapeHTML(c.id)}</span></td>
       <td>${escapeHTML(c.flow || '')}</td>
-      <td><button data-action="show">Show link</button></td>`;
+      <td><button class="btn-action" data-action="show">Show link</button></td>`;
     tr.addEventListener('click', e => {
       if (e.target.tagName === 'BUTTON') return;
       openClientModal(c);
@@ -121,8 +134,8 @@ function paintClients(data) {
       <td><span class="uuid">${escapeHTML(c.id)}</span></td>
       <td>${escapeHTML(fmtDate(c.disabledAt))}</td>
       <td>
-        <button data-action="enable">Enable</button>
-        <button class="danger" data-action="delete">Delete</button>
+        <button class="btn-action" data-action="enable">Enable</button>
+        <button class="btn-action btn-danger" data-action="delete">Delete</button>
       </td>`;
     tr.querySelector('[data-action="enable"]').addEventListener('click', () => enableClient(c.id));
     tr.querySelector('[data-action="delete"]').addEventListener('click', () => deleteClient(c.id, c.name));
@@ -132,6 +145,16 @@ function paintClients(data) {
 function paintServerInfo(data) {
   const dl = $('#server-info');
   const r = (data.server && data.server.reality) || {};
+  const port = data.server?.port;
+  const listenAddr = (data.server?.listen || '') + (port ? ':' + port : '');
+
+  // Status pills in the Server card-head.
+  setPill($('#srv-pill-listen'), listenAddr || '—', listenAddr ? 'info' : 'muted');
+  setPill($('#srv-pill-stats'), data.stats_api_enabled ? 'enabled' : 'off',
+          data.stats_api_enabled ? 'ok' : 'muted');
+  setPill($('#srv-pill-online'), data.online_tracking_enabled ? 'enabled' : 'off',
+          data.online_tracking_enabled ? 'ok' : 'muted');
+
   dl.innerHTML = '';
   const rows = [
     ['server_address (from panel.yaml)', data.server_address || ''],
@@ -143,7 +166,6 @@ function paintServerInfo(data) {
     ['reality.shortIds', (r.shortIds || []).join(', ')],
     ['reality.fingerprint', r.fingerprint || ''],
     ['reality.publicKey', r.publicKey || '(not derived)'],
-    ['stats API', data.stats_api_enabled ? 'enabled' : 'disabled'],
   ];
   rows.forEach(([k, v]) => {
     const dt = document.createElement('dt'); dt.textContent = k;
@@ -292,17 +314,21 @@ function startLogsStream() {
   const which = $('#logs-which').value;
   const tail = parseInt($('#logs-tail').value, 10) || 200;
   $('#logs-body').textContent = '';
-  $('#logs-meta').textContent = `live (${which}, last ${tail})`;
+  $('#logs-meta').textContent = `seeding ${tail} lines…`;
+  setPill($('#logs-pill-which'), which, 'info');
+  setPill($('#logs-pill-mode'), 'live', 'ok');
   const url = `/api/logs/${encodeURIComponent(which)}/stream?backfill=${tail}`;
   logsES = new EventSource(url, { withCredentials: true });
   logsES.onmessage = ev => {
     const body = $('#logs-body');
     body.textContent += (body.textContent ? '\n' : '') + ev.data;
     body.scrollTop = body.scrollHeight;
+    $('#logs-meta').textContent = `live (${which})`;
   };
   logsES.onerror = () => {
     // EventSource auto-reconnects; surface a one-shot toast then let it.
     $('#logs-meta').textContent = `live (${which}) — reconnecting…`;
+    setPill($('#logs-pill-mode'), 'reconnecting…', 'warn');
   };
 }
 
@@ -311,6 +337,8 @@ async function refreshLogs() {
   // while Live is still negotiating its first event.
   const which = $('#logs-which').value;
   const tail = $('#logs-tail').value || 200;
+  setPill($('#logs-pill-which'), which, 'info');
+  setPill($('#logs-pill-mode'), 'snapshot', 'muted');
   try {
     const data = await api('GET', `/api/logs/${which}?tail=${tail}`);
     $('#logs-body').textContent = (data.lines || []).join('\n');
@@ -337,6 +365,10 @@ async function refreshActivity() {
     const data = await api('GET', '/api/activity');
     const tbody = $('#activity-body');
     tbody.innerHTML = '';
+    setPill($('#act-pill-enabled'), data.enabled ? 'enabled' : 'off',
+            data.enabled ? 'ok' : 'muted');
+    setPill($('#act-pill-online'), data.online_tracked ? 'enabled' : 'off',
+            data.online_tracked ? 'ok' : 'muted');
     if (!data.enabled) {
       $('#activity-meta').textContent = data.message || 'Stats not enabled.';
       return;

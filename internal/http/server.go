@@ -110,13 +110,14 @@ func (s *Server) publicKey(ctx context.Context, priv string) (string, error) {
 // explicit (not the raw xray.File) so we control what's exposed — in
 // particular, the Reality private key never leaves the server.
 type stateResponse struct {
-	ServerAddress   string                `json:"server_address"`
-	Service         service.State         `json:"service"`
-	Server          serverBlock           `json:"server"`
-	Clients         []clientBlock         `json:"clients"`
-	Disabled        []disabledClientBlock `json:"disabled"`
-	StatsAPIEnabled bool                  `json:"stats_api_enabled"`
-	Warnings        []string              `json:"warnings,omitempty"`
+	ServerAddress         string                `json:"server_address"`
+	Service               service.State         `json:"service"`
+	Server                serverBlock           `json:"server"`
+	Clients               []clientBlock         `json:"clients"`
+	Disabled              []disabledClientBlock `json:"disabled"`
+	StatsAPIEnabled       bool                  `json:"stats_api_enabled"`
+	OnlineTrackingEnabled bool                  `json:"online_tracking_enabled"`
+	Warnings              []string              `json:"warnings,omitempty"`
 }
 
 type disabledClientBlock struct {

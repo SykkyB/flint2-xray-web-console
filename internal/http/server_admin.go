@@ -279,6 +279,39 @@ func (s *Server) handleEnableOnlineTracking(w nethttp.ResponseWriter, r *nethttp
 	writeJSON(w, nethttp.StatusOK, enableOnlineResp{Status: "enabled"})
 }
 
+// policyHasOnlineFlag returns true iff the policy block already enables
+// per-user online tracking (levels.0.statsUserOnline=true). Used by
+// /api/state so the UI can show whether online tracking is on without
+// guessing from the Activity API's response.
+func policyHasOnlineFlag(existing json.RawMessage) bool {
+	if len(existing) == 0 {
+		return false
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(existing, &root); err != nil {
+		return false
+	}
+	levels := map[string]json.RawMessage{}
+	if raw, ok := root["levels"]; ok && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &levels); err != nil {
+			return false
+		}
+	}
+	level0 := map[string]json.RawMessage{}
+	if raw, ok := levels["0"]; ok && len(raw) > 0 {
+		if err := json.Unmarshal(raw, &level0); err != nil {
+			return false
+		}
+	}
+	if raw, ok := level0["statsUserOnline"]; ok {
+		var b bool
+		if err := json.Unmarshal(raw, &b); err == nil {
+			return b
+		}
+	}
+	return false
+}
+
 // mergeOnlineFlag parses policy, sets levels.0.statsUserOnline=true,
 // and returns the re-encoded block. Handles three cases:
 //   - policy is nil/empty: emit a fresh policy with the flag on
