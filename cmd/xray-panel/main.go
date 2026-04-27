@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	nethttp "net/http"
 	"os"
 	"os/signal"
@@ -51,14 +52,23 @@ func main() {
 	}
 
 	httpSrv := &nethttp.Server{
-		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Force tcp4: Go's default "tcp" opens an AF_INET6 dual-stack socket
+	// when the listen address has no explicit host (":9092") or is the
+	// IPv4 wildcard ("0.0.0.0:9092"), which on this kernel (5.4 with
+	// net.mptcp.enabled=1) triggers an MPTCP path that breaks the
+	// listener. Listening on tcp4 sidesteps the whole class of problems.
+	ln, err := net.Listen("tcp4", cfg.Listen)
+	if err != nil {
+		log.Fatalf("listen tcp4 %s: %v", cfg.Listen, err)
+	}
+
 	go func() {
-		log.Printf("xray-panel listening on %s", cfg.Listen)
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, nethttp.ErrServerClosed) {
+		log.Printf("xray-panel listening on %s (tcp4)", cfg.Listen)
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, nethttp.ErrServerClosed) {
 			log.Fatalf("http: %v", err)
 		}
 	}()
