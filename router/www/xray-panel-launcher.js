@@ -23,10 +23,112 @@
     var SIDEBAR_ID = "xray-panel-sidebar";
     var MAX_TRIES  = 60;       // 60 × 250ms = 15s, plenty for SPA boot
     var POLL_MS    = 250;
+    // Status-dot poll cadence. The xray service flips state rarely
+    // (manual start/stop from our panel), so 5s is plenty fresh
+    // without spamming the router.
+    var STATUS_POLL_MS = 5000;
+    var STATUS_DOT_CLASS = "xray-status-dot";
+    var STATUS_DOT_CSS_ID = "xray-status-dot-style";
 
     function panelURL() {
         return location.protocol.replace("https:", "http:") +
                "//" + location.hostname + ":" + PORT + "/";
+    }
+
+    function panelOriginNoSlash() {
+        return location.protocol.replace("https:", "http:") +
+               "//" + location.hostname + ":" + PORT;
+    }
+
+    // probeUp loads /api/up.png as an <img>. 200 → onload (server up),
+    // 404 → onerror (server down). No CORS preflight, no credentials,
+    // no auth dialog. 4s hard timeout falls back to "down".
+    function probeUp(onResult) {
+        var done = false;
+        var img = new Image();
+        function finish(ok) {
+            if (done) return;
+            done = true;
+            try { onResult(ok); } catch (e) {}
+        }
+        img.onload  = function () { finish(true); };
+        img.onerror = function () { finish(false); };
+        img.src = panelOriginNoSlash() + "/api/up.png?ts=" + Date.now();
+        setTimeout(function () { finish(false); }, 4000);
+    }
+
+    // GL.iNet renders its native .status-badge conditionally — when a
+    // sidebar item's service is inactive the badge is a Vue comment
+    // placeholder, not an element, so cloneNode picks up nothing to
+    // toggle. Inject our own dot styled to match the native size /
+    // shape / position, coloured via the theme's --text-menu-active
+    // variable so it tracks light / dark switching automatically.
+    function injectStatusDotCSS() {
+        if (document.getElementById(STATUS_DOT_CSS_ID)) return;
+        var style = document.createElement("style");
+        style.id = STATUS_DOT_CSS_ID;
+        // Pick up the same colour the native .status-badge.is-active
+        // uses (--text-menu-active) so our dot matches stock dots
+        // exactly across themes / firmware versions. Fallback to the
+        // observed gl-teal #1ec3a4 if the variable isn't defined for
+        // some reason.
+        style.textContent =
+            "." + STATUS_DOT_CLASS + " { " +
+                "display: inline-block !important; " +
+                "width: 8px; height: 8px; " +
+                "border-radius: 50%; " +
+                "margin-left: 10px; " +
+                "vertical-align: middle; " +
+                "flex-shrink: 0; " +
+                "background-color: transparent; " +
+            "} " +
+            "." + STATUS_DOT_CLASS + ".is-active { " +
+                "background-color: var(--text-menu-active, #1ec3a4) !important; " +
+            "}";
+        document.head.appendChild(style);
+    }
+
+    function ensureStatusDot(entry) {
+        var dot = entry.querySelector("." + STATUS_DOT_CLASS);
+        if (dot) return dot;
+        dot = document.createElement("span");
+        dot.className = STATUS_DOT_CLASS;
+        // Place the dot right after the visible label so it sits
+        // where the native .status-badge would sit on stock items.
+        var label = entry.querySelector(".menu-title") ||
+                    entry.querySelector("span");
+        if (label && label.parentNode) {
+            label.parentNode.insertBefore(dot, label.nextSibling);
+        } else {
+            entry.appendChild(dot);
+        }
+        return dot;
+    }
+
+    function setStatusDot(active) {
+        var entry = document.getElementById(SIDEBAR_ID);
+        if (!entry) {
+            try { console.log("[xray-panel] setStatusDot: entry missing"); } catch (e) {}
+            return;
+        }
+        injectStatusDotCSS();
+        var dot = ensureStatusDot(entry);
+        if (active) {
+            dot.classList.add("is-active");
+        } else {
+            dot.classList.remove("is-active");
+        }
+        try { console.log("[xray-panel] dot →", active ? "ACTIVE" : "inactive", dot); } catch (e) {}
+    }
+
+    function tickStatus() {
+        if (!document.getElementById(SIDEBAR_ID)) return;
+        probeUp(setStatusDot);
+    }
+
+    function startStatusPoll() {
+        tickStatus();
+        setInterval(tickStatus, STATUS_POLL_MS);
     }
 
     // Poll until check() returns truthy; then call onFound(value). Uses
@@ -152,11 +254,16 @@
 
             // Append at the end of the VPN submenu.
             sub.appendChild(clone);
+
+            // Immediately probe + paint so the dot doesn't wait a
+            // full 5s tick after the sidebar renders.
+            try { tickStatus(); } catch (e) {}
         });
     }
 
     function init() {
         try { renderSidebar(); } catch (e) {}
+        try { startStatusPoll(); } catch (e) {}
     }
 
     if (document.readyState === "loading") {
@@ -175,6 +282,11 @@
             setTimeout(function () {
                 pending = false;
                 if (!document.getElementById(SIDEBAR_ID)) renderSidebar();
+                // SPA may also rerender our entry, dropping the
+                // is-active class we toggle on its .status-badge.
+                // Re-tick on the next frame so the dot stays in
+                // sync without waiting a full poll interval.
+                tickStatus();
             }, 250);
         }).observe(document.body, { childList: true, subtree: true });
     }

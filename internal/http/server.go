@@ -77,7 +77,21 @@ func (s *Server) Handler() nethttp.Handler {
 	s.registerLogRoutes(mux)
 	s.registerActivityRoute(mux)
 	s.registerUIRoutes(mux)
-	return BasicAuth(s.Cfg.Auth.Username, s.Cfg.Auth.PasswordBcrypt, mux)
+	authed := BasicAuth(s.Cfg.Auth.Username, s.Cfg.Auth.PasswordBcrypt, mux)
+
+	// /api/up.png is a "is xray running right now" probe used by the
+	// GL.iNet sidebar launcher to flip the dot next to "XRAY server"
+	// green. Cross-origin <img> loads can't carry basic-auth without
+	// first triggering a browser password prompt, so this one route
+	// bypasses auth. Leaks only "xray up/down" — already inferable
+	// from any LAN client poking the inbound port.
+	return nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		if r.Method == nethttp.MethodGet && r.URL.Path == "/api/up.png" {
+			s.handleUpPing(w, r)
+			return
+		}
+		authed.ServeHTTP(w, r)
+	})
 }
 
 // InvalidatePublicKey drops the cached public key. Call after any write
