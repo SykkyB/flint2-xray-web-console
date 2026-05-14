@@ -15,6 +15,8 @@
 #   /usr/bin/xray-panel           — panel binary
 #   /www/xray-panel-launcher.js   — sidebar launcher injected into GL.iNet UI
 #   /www/gl_home.html.bak         — pristine pre-launcher gl_home (for revert)
+#   /usr/share/zoneinfo/Asia      — TZif blobs we install to coax xray-core
+#                                   into logging local time instead of UTC
 #
 # Output layout:
 #   /mnt/sda1/xray-backup/
@@ -40,6 +42,7 @@ SRC_PATHS="
 /usr/bin/xray-panel
 /www/xray-panel-launcher.js
 /www/gl_home.html.bak
+/usr/share/zoneinfo/Asia
 "
 
 log() {

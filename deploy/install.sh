@@ -44,6 +44,7 @@ scp $SSH_OPTS $SCP_OPTS \
 	"$REPO_ROOT/deploy/panel.example.yaml" \
 	"$REPO_ROOT/deploy/xray-panel-backup" \
 	"$REPO_ROOT/router/www/xray-panel-launcher.js" \
+	"$REPO_ROOT/deploy/zoneinfo/Asia/Tbilisi" \
 	"$TARGET:/tmp/"
 
 echo ">>> installing on $TARGET"
@@ -90,6 +91,19 @@ if [ -f /www/gl_home.html ]; then
 	fi
 fi
 
+# Asia/Tbilisi zoneinfo (TZif binary). Without it, xray-core (Go) logs
+# in UTC: /etc/TZ on OpenWrt holds a POSIX string like "<+04>-4" that
+# Go's parser doesn't reliably resolve, and the stock firmware ships
+# no zoneinfo files. We drop a minimal fixed-offset (+4, no DST) TZif
+# at the standard path, then refresh /tmp/localtime — /etc/init.d/system
+# at boot symlinks /usr/share/zoneinfo/<zonename> → /tmp/localtime
+# automatically, so once the file is on disk the chain stays valid
+# across reboots without further patching.
+mkdir -p /usr/share/zoneinfo/Asia
+cp /tmp/Tbilisi /usr/share/zoneinfo/Asia/Tbilisi
+chmod 0644     /usr/share/zoneinfo/Asia/Tbilisi
+ln -sfn /usr/share/zoneinfo/Asia/Tbilisi /tmp/localtime
+
 mkdir -p /etc/xray-panel
 if [ ! -f /etc/xray-panel/panel.yaml ]; then
 	cp /tmp/panel.example.yaml /etc/xray-panel/panel.yaml
@@ -119,7 +133,7 @@ else
 	echo ">>> backup cron entry already present"
 fi
 
-rm -f /tmp/xray-panel /tmp/xray-panel.init /tmp/panel.example.yaml /tmp/xray-panel-backup /tmp/xray-panel-launcher.js
+rm -f /tmp/xray-panel /tmp/xray-panel.init /tmp/panel.example.yaml /tmp/xray-panel-backup /tmp/xray-panel-launcher.js /tmp/Tbilisi
 
 /etc/init.d/xray-panel enable
 
