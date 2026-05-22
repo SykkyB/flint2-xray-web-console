@@ -154,6 +154,11 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - `/home/sykkyb/.bashrc`, `.profile`, `.msmtprc`, `.ssh/`, `watchdog/`
 - `/usr/local/bin/{rsnapshot-safe,system-config-readroot}`
 - crontab snapshot, `docker ps -a`, `docker volume ls`, `docker network ls`
+- SQLite базы (`RYZEN_SQLITE_DBS` в скрипте): `/srv/vanilla-sky/data/state.db` —
+  снимается через `sqlite3 .backup` чтобы получить консистентный снапшот
+  на живом WAL. Без этого после потери ryzen бот перезапустится с пустой
+  историей и при первом цикле залпом перешлёт «newly released» по каждому
+  bookable рейсу.
 
 **Что бэкапится с ryzen через root (NOPASSWD sudo на specific helper):**
 - `/etc/netplan/`, `/etc/ufw/`, `/etc/systemd/system/caddy.service.d/`, `/root/.ssh/authorized_keys`
@@ -197,13 +202,13 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 
 ### Pipeline 3 — beryl manual from Mac (`scripts/backup.sh`)
 
-**Расположение:** `~/Documents/projects/beryl-xray-web-console/scripts/backup.sh`
+**Расположение:** `~/Documents/projects/home-lab/beryl-xray-web-console/scripts/backup.sh`
 
 **Когда использовать:** beryl дома + хочется guarantee'ать снапшот прямо сейчас (например после изменений в xray-panel-cli или конфигах). Или если cron на beryl был отключён.
 
 **Запуск:**
 ```bash
-cd ~/Documents/projects/beryl-xray-web-console
+cd ~/Documents/projects/home-lab/beryl-xray-web-console
 scripts/backup.sh           # цель beryl
 scripts/backup.sh other     # цель custom SSH alias
 ```
@@ -304,7 +309,12 @@ cd /tmp/restore && tar -xzf system-config-*.tar.gz
 
 # 2. Compose-стеки → /srv (нужен root)
 scp -r ryzen4700/srv/* ryzen4700:/tmp/srv-restore/
-ssh ryzen4700 'sudo cp -a /tmp/srv-restore/* /srv/ && sudo chown -R sykkyb:docker /srv/immich/'
+ssh ryzen4700 'sudo cp -a /tmp/srv-restore/* /srv/ && \
+  sudo chown -R sykkyb:docker /srv/immich/ && \
+  sudo chown -R sykkyb:sykkyb /srv/vanilla-sky/data/'
+# state.db поднимется автоматически (sqlite-backup в архиве — обычный файл).
+# Важно: chown под user сделать ДО старта vanilla-sky-monitor, иначе контейнер
+# (UID 1000) не сможет писать в state.db и упадёт.
 
 # 3. Caddy config + systemd
 scp -r ryzen4700/etc/caddy ryzen4700:/tmp/
@@ -424,7 +434,7 @@ ssh flint2 '/usr/sbin/system-config-backup --force'   # форс-снапшот
 ssh beryl  '/usr/sbin/beryl-config-backup --force'
 
 # Mac-side beryl backup
-cd ~/Documents/projects/beryl-xray-web-console && scripts/backup.sh
+cd ~/Documents/projects/home-lab/beryl-xray-web-console && scripts/backup.sh
 ```
 
 ### 6.3 Установка rclone на флинт (после reset/restore)
