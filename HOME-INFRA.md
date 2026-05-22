@@ -10,7 +10,7 @@
 | Hostname | Role | Subnet | OS | SSH alias |
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
-| **ryzen4700** | домашний сервер, Immich + бот, cloudflared | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
+| **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
 | **beryl** | travel-роутер, sing-box VPN-клиент | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000) | `beryl` |
 
 Доменные имена (через DNS sys-lab.xyz):
@@ -46,6 +46,14 @@
 - **Что:** `docker inspect` для whitelist'а: immich_server, immich_machine_learning, immich_postgres, immich_redis, vanilla-sky-monitor, vanilla-sky-redirect, cloudflared
 - **Триггер:** контейнер не в state=running ИЛИ Health=unhealthy три раза подряд
 - **Лог:** `/home/sykkyb/watchdog/watchdog.log` (только фейлы и переходы)
+
+**Layer 1 add-on — media-srv watchdog**
+- **Где:** `/opt/media-srv/scripts/watchdog-check.sh` (symlink в `/usr/local/bin/media-srv-watchdog`)
+- **Cron:** `* * * * *` (пользовательский cron sykkyb)
+- **Что:** `docker inspect` + HTTP probe для 7 контейнеров media-srv (jellyfin/qbittorrent/prowlarr/sonarr/radarr/bazarr/overseerr) + `df` probe для `/mnt/media` (warn ≥90%)
+- **Триггер:** state transition (ok→down / down→ok). Алерт только при смене статуса, не каждую минуту
+- **State:** `/var/tmp/media-srv-watchdog/<service>.state`
+- **Telegram:** тот же `flint2_watchdog_bot`, креды из `/etc/watchdog/telegram.env`
 - **Пример алёрта:**
   ```
   🔴 SERVICE DOWN — INTERNAL
@@ -214,6 +222,35 @@ scripts/backup.sh other     # цель custom SSH alias
 ```
 
 Делает то же что Pipeline 2, но запускается с Mac → SCP файлов → tar.gz в `<repo>/backups/` (gitignored). Дополнительно мирорит в R2 (`r2:sys-lab-home-backups/beryl-snapshots/`).
+
+### Pipeline 4 — media-srv appdata (restic, local-only)
+
+Отдельный pipeline для configs стека Jellyfin + *arr на ryzen. **Не в R2** — слишком большие SQLite БД (~сотни MB у Sonarr/Radarr/Jellyfin), CIFS-том на flint2 (`/mnt/sda1/immich-backup/`, mount как `/backup` на ryzen) уже есть и доступен.
+
+**Расположение:**
+- Скрипт: `/opt/media-srv/scripts/backup.sh` (из репо `github.com/SykkyB/media-srv`)
+- Restic репо: `/backup/restic-media-srv/` (это CIFS-mount на flint2:/mnt/sda1/immich-backup)
+- Пароль: `/root/.restic-media-srv.pass` (chmod 600, продублирован в 1Password)
+- Лог: `/var/log/media-srv-backup.log`
+
+**Cron на ryzen (root):**
+```
+30 3 * * * /opt/media-srv/scripts/backup.sh >> /var/log/media-srv-backup.log 2>&1
+```
+
+**Что бэкапится:**
+- `/opt/appdata/` целиком (configs + SQLite всех сервисов)
+- Исключения: `*/log/*`, `*/logs/*`, `*/Logs/*`, `*/Cache/*`, `*/cache/*`
+
+**Что НЕ бэкапится (намеренно):**
+- `/mnt/media/` — сам медиа-контент (фильмы/сериалы/торренты). Можно перекачать.
+- `/var/lib/docker/` — overlay + volumes. `jellyfin_cache` — derived, не нужен.
+
+**Поведение:**
+- Скрипт делает `docker compose stop` → restic snapshot → `start` (через trap, чтобы стек поднялся даже при ошибке снапшота). Это нужно чтобы SQLite (Sonarr/Radarr/Jellyfin) не повредились на живом WAL.
+- Retention: 7 daily + 4 weekly + 6 monthly. На 2-3 GB начального снапшота с dedup занимает ~5-10 GB в `/backup` через год.
+
+**Restore:** `/opt/media-srv/scripts/restore.sh` — интерактивный (выбор snapshot ID + target dir). Подробнее в разделе 5.6.
 
 ---
 
@@ -409,6 +446,46 @@ cat watchdog-config-backup-2026-05-04_2215/cloudflare-worker/worker.js
 
 Эти сервисы пересоздаются вручную через UI (нет API-export'а на free плане).
 
+### 5.6 Восстановление media-srv (restic из /backup)
+
+Сценарий: ryzen переустановлен / SSD заменён / configs повреждены. Сам медиа-контент (`/mnt/media/`) на USB-диске WD My Passport не теряется при переустановке системы, поэтому восстанавливаем только `/opt/appdata/`.
+
+```bash
+# 1. Базовый host prep (см. SETUP.md в репо media-srv)
+#    - ext4 на /dev/sda1 (если диск новый), монтаж в /mnt/media (fstab)
+#    - hd-idle, render group, VA-API libs
+#    - CIFS mount /backup ← flint2:/mnt/sda1/immich-backup
+#
+# 2. Клонируем репо
+sudo git clone git@github.com:SykkyB/media-srv.git /opt/media-srv
+sudo chown -R sykkyb:sykkyb /opt/media-srv
+cd /opt/media-srv
+cp .env.example .env
+$EDITOR .env
+
+# 3. Кладём пароль restic
+sudo install -m 600 /dev/null /root/.restic-media-srv.pass
+echo '<пароль из 1Password>' | sudo tee /root/.restic-media-srv.pass
+
+# 4. Восстанавливаем appdata
+sudo restic -r /backup/restic-media-srv \
+  --password-file /root/.restic-media-srv.pass \
+  restore latest --target /
+
+# 5. Запускаем стек
+./scripts/deploy.sh
+
+# 6. Подключаем watchdog (cron sykkyb)
+sudo ln -sf /opt/media-srv/scripts/watchdog-check.sh /usr/local/bin/media-srv-watchdog
+(crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/media-srv-watchdog") | crontab -
+
+# 7. Подключаем daily backup (root crontab)
+sudo crontab -e
+# 30 3 * * * /opt/media-srv/scripts/backup.sh >> /var/log/media-srv-backup.log 2>&1
+```
+
+Sonarr/Radarr/Jellyfin поднимутся со всей библиотекой и историей загрузок. Если торренты были в активной раздаче — qBittorrent попробует переподключиться к peers и продолжит с того же места (state.fastresume в configs).
+
 ---
 
 ## 6. Routine ops
@@ -486,6 +563,7 @@ curl -X POST https://exit1-telegram-relay.alexandr-rachok.workers.dev \
 | sing-box VLESS UUID (beryl) | `beryl:/etc/sing-box/config.json` |
 | xray-panel bcrypt hash | `beryl:/etc/xray-panel-cli/panel.yaml` |
 | sykkyb's GitHub SSH key | `ryzen4700:~/.ssh/sykkyb@github` (приватный) |
+| restic репо media-srv (пароль) | `ryzen4700:/root/.restic-media-srv.pass` (chmod 600), дубль в 1Password |
 
 **Ничего из этого не должно попасть в git.** Все паттерны секретов ловятся .gitignore'ами в соответствующих репах.
 
