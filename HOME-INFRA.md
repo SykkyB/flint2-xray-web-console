@@ -555,6 +555,60 @@ curl -X POST https://exit1-telegram-relay.alexandr-rachok.workers.dev \
   -d '{"event":"website_down","website":{"name":"Test","url":"https://example.com"},"timestamp":1777914797814}'
 ```
 
+### 6.6 Docker hygiene — resource limits, healthchecks, log rotation
+
+Базовая операционная гигиена применена ко **всем** Docker-стекам на ryzen4700, чтобы один runaway-контейнер не положил остальные. Подход — [Otus best-practices](https://habr.com/ru/companies/otus/articles/1034390/).
+
+**Log rotation — host-wide (один раз):**
+```bash
+# /etc/docker/daemon.json
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+```
+После записи: `sudo systemctl restart docker` (рестартанёт все контейнеры). Применяется ко **всем** Docker-стекам на хосте без правок в compose.
+
+**Resource limits + healthchecks по стекам:**
+
+| Стек | Где конфиг | Лимиты заданы как | Healthchecks |
+|------|------------|-------------------|--------------|
+| media-srv (8 контейнеров) | `/opt/media-srv/docker-compose.yml` (git) | `deploy.resources.limits` + `reservations` | Все 7 с HTTP — кастомные; Jellyfin — встроенный; Searcharr — без (нет HTTP) |
+| immich (4 контейнера) | `/srv/immich/docker-compose.override.yml` (НЕ в git, не трогает upstream) | legacy `mem_limit` + `cpus` (потому что upstream уже задаёт `cpus:` для machine-learning) | Встроенные в образы |
+| vanilla-sky (2 контейнера) | `~/Documents/projects/home-lab/ryzen4700-homesrv/vanilla-sky/docker-compose.yml` (git) | `deploy.resources.limits` | Кастомные (heartbeat-файл / HTTP /health) |
+| cloudflared (1 контейнер) | `/srv/cloudflared/docker-compose.override.yml` (НЕ в git, не трогает upstream) | `deploy.resources.limits` | Нет (cloudflared не имеет встроенного, добавление curl/wget не оправдано) |
+
+**Бюджет памяти на ryzen4700 (32 GiB total):**
+
+| Стек | Сумма limits | Доля от 32 GiB |
+|------|--------------|---------------|
+| media-srv | ~10 GiB | 31% |
+| immich | ~7.25 GiB | 23% |
+| vanilla-sky | 256 MiB | <1% |
+| cloudflared | 128 MiB | <1% |
+| **итого compose-лимиты** | **~17.6 GiB** | **55%** |
+| host + buffers + page cache | ~14 GiB | 45% |
+
+Лимиты — потолок, не reservation. Фактическое потребление в idle ~3-4 GiB суммарно (immich-ml ест больше всех когда индексирует, jellyfin — когда транскодит).
+
+**Проверка состояния:**
+```bash
+# Кратко: все контейнеры и health
+docker ps --format 'table {{.Names}}\t{{.Status}}'
+
+# Память / CPU по факту против лимитов
+docker stats --no-stream
+
+# Размер логов на хосте
+sudo du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
+```
+
+**Override files — где смотреть:**
+- `/srv/immich/docker-compose.override.yml` — лимиты только, остальное в upstream
+- `/srv/cloudflared/docker-compose.override.yml` — лимит cloudflared
+- Override-файлы автоматически merge'атся compose'ом при `up -d` в той же папке.
+- ⚠️ **Бэкап**: `system-config-backup` сейчас захватывает только `/srv/*/docker-compose.yml` + `.env` + `config.yml` (см. Pipeline 1). Override-файлы **не входят** в этот список. Либо добавить паттерн `docker-compose.override.yml` в `RYZEN_FILES` скрипта, либо при восстановлении ryzen пересоздать override'ы вручную (они короткие, текст выше).
+
 ---
 
 ## 7. Где живут креды
