@@ -10,7 +10,7 @@
 | Hostname | Role | Subnet | OS | SSH alias |
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
-| **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
+| **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
 | **beryl** | travel-роутер, sing-box VPN-клиент | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000) | `beryl` |
 
 Доменные имена (через DNS sys-lab.xyz):
@@ -50,10 +50,12 @@
 **Layer 1 add-on — media-srv watchdog**
 - **Где:** `/opt/media-srv/scripts/watchdog-check.sh` (symlink в `/usr/local/bin/media-srv-watchdog`)
 - **Cron:** `* * * * *` (пользовательский cron sykkyb)
-- **Что:** `docker inspect` + HTTP probe для 7 контейнеров media-srv (jellyfin/qbittorrent/prowlarr/sonarr/radarr/bazarr/overseerr) + `df` probe для `/mnt/media` (warn ≥90%)
+- **Что:** `docker inspect` + HTTP probe для 8 контейнеров media-srv (jellyfin/qbittorrent/prowlarr/sonarr/radarr/bazarr/jellyseerr/searcharr) + `df` probe для `/mnt/media` (warn ≥90%)
 - **Триггер:** state transition (ok→down / down→ok). Алерт только при смене статуса, не каждую минуту
-- **State:** `/var/tmp/media-srv-watchdog/<service>.state`
-- **Telegram:** тот же `flint2_watchdog_bot`, креды из `/etc/watchdog/telegram.env`
+- **State:** `/var/tmp/media-srv-watchdog/<service>.state` (refreshed every run — dir always reflects current state)
+- **Telegram:** тот же `flint2_watchdog_bot`, креды из `~/watchdog/config.env` (`TG_TOKEN` / `TG_CHAT_ID` / `HOST_LABEL` — те же что у immich-watchdog)
+- **Time:** карточки в Asia/Tbilisi даже когда host TZ=UTC (через `TZ_NAME` в скрипте)
+- **Формат:** структурированные карточки в стиле Layer 1 (icon + title + From/Source/Service/Detail/Time)
 - **Пример алёрта:**
   ```
   🔴 SERVICE DOWN — INTERNAL
@@ -235,8 +237,9 @@ scripts/backup.sh other     # цель custom SSH alias
 
 **Cron на ryzen (root):**
 ```
-30 3 * * * /opt/media-srv/scripts/backup.sh >> /var/log/media-srv-backup.log 2>&1
+30 6 * * * /opt/media-srv/scripts/backup.sh >> /var/log/media-srv-backup.log 2>&1
 ```
+(хост TZ=UTC, так что 06:30 UTC = 10:30 по Tbilisi)
 
 **Что бэкапится:**
 - `/opt/appdata/` целиком (configs + SQLite всех сервисов)
@@ -486,6 +489,8 @@ sudo crontab -e
 
 Sonarr/Radarr/Jellyfin поднимутся со всей библиотекой и историей загрузок. Если торренты были в активной раздаче — qBittorrent попробует переподключиться к peers и продолжит с того же места (state.fastresume в configs).
 
+**Searcharr** — `/opt/appdata/searcharr/settings.py` тоже восстановится из restic, включая bot token и passwords. Если ты сменил host или потерял bot — пересоздай через @BotFather и впиши новый `tgram_token`. Авторизованные user_id хранятся в `searcharr.db` рядом, тоже восстанавливаются.
+
 ---
 
 ## 6. Routine ops
@@ -564,6 +569,8 @@ curl -X POST https://exit1-telegram-relay.alexandr-rachok.workers.dev \
 | xray-panel bcrypt hash | `beryl:/etc/xray-panel-cli/panel.yaml` |
 | sykkyb's GitHub SSH key | `ryzen4700:~/.ssh/sykkyb@github` (приватный) |
 | restic репо media-srv (пароль) | `ryzen4700:/root/.restic-media-srv.pass` (chmod 600), дубль в 1Password |
+| Searcharr TG bot token | `ryzen4700:/opt/appdata/searcharr/settings.py` (отдельный bot от `flint2_watchdog_bot`, создан через @BotFather специально для запросов) |
+| Searcharr user/admin passwords | те же `searcharr_password` / `searcharr_admin_password` в `settings.py` — клиенты вводят при `/start <password>` |
 
 **Ничего из этого не должно попасть в git.** Все паттерны секретов ловятся .gitignore'ами в соответствующих репах.
 
