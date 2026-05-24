@@ -607,7 +607,47 @@ sudo du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
 - `/srv/immich/docker-compose.override.yml` — лимиты только, остальное в upstream
 - `/srv/cloudflared/docker-compose.override.yml` — лимит cloudflared
 - Override-файлы автоматически merge'атся compose'ом при `up -d` в той же папке.
-- ⚠️ **Бэкап**: `system-config-backup` сейчас захватывает только `/srv/*/docker-compose.yml` + `.env` + `config.yml` (см. Pipeline 1). Override-файлы **не входят** в этот список. Либо добавить паттерн `docker-compose.override.yml` в `RYZEN_FILES` скрипта, либо при восстановлении ryzen пересоздать override'ы вручную (они короткие, текст выше).
+- **Бэкап**: `system-config-backup` теперь захватывает `docker-compose.override.yml` через `RYZEN_PATHS` (обновлено вместе с `/opt/media-srv/.env`).
+
+### 6.7 Pretty URLs — Caddy reverse proxy + AdGuard DNS rewrites
+
+Все 7 media-srv-сервисов плюс immich доступны по красивым subdomain'ам внутри LAN/WG с настоящим Let's Encrypt TLS. Цепочка:
+
+```
+client
+  └─ DNS query "jellyfin.media.sys-lab.xyz"
+     ↓
+  AdGuard Home on flint2 (192.168.100.1:53 → 3053)
+     └─ DNS Rewrite: *.media.sys-lab.xyz → 192.168.100.5
+     ↓
+  Caddy on ryzen4700:443
+     ├─ wildcard cert *.media.sys-lab.xyz (Let's Encrypt DNS-01 via CF API token)
+     └─ reverse_proxy localhost:<port>
+     ↓
+  service
+```
+
+**Subdomain → upstream port:**
+
+| Subdomain                          | Port |
+|------------------------------------|------|
+| `jellyfin.media.sys-lab.xyz`       | 8096 |
+| `qbit.media.sys-lab.xyz`           | 8080 |
+| `prowlarr.media.sys-lab.xyz`       | 9696 |
+| `sonarr.media.sys-lab.xyz`         | 8989 |
+| `radarr.media.sys-lab.xyz`         | 7878 |
+| `bazarr.media.sys-lab.xyz`         | 6767 |
+| `jellyseerr.media.sys-lab.xyz`     | 5055 |
+| `immich.sys-lab.xyz:8443`          | 2283 (publicly exposed via cloudflared, separate block in same Caddyfile) |
+
+**Config:**
+- Caddyfile: `/etc/caddy/Caddyfile` (один блок `*.media.sys-lab.xyz` с матчерами по host)
+- CF API token: `/etc/systemd/system/caddy.service.d/env.conf` (env `CF_API_TOKEN`)
+- AdGuard DNS rewrites: в AdGuard Home UI → http://192.168.100.1:3000 → Filters → DNS rewrites
+
+**Не публичный доступ.** ISP блокирует входящие 80/443, и AdGuard отдаёт `*.media.sys-lab.xyz` только в LAN-IP. То есть в интернете эти имена «висят», но никто к ним не подключится. WireGuard-клиенты получают AdGuard как DNS, поэтому те же URL работают с телефона/ноута через WG.
+
+**Восстановление после потери ryzen** (см. 5.2): Caddyfile входит в system-config-backup. CF_API_TOKEN тоже сохранится (через `/etc/systemd/system/caddy.service.d/env.conf`). После восстановления — `sudo systemctl reload caddy` и Caddy сам перевыпишет cert через DNS-01.
 
 ---
 
