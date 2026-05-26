@@ -196,7 +196,8 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 
 **Что бэкапится:**
 - `/usr/bin/sing-box`, `/usr/bin/xray-panel-cli`
-- `/etc/sing-box/`, `/etc/config/sing-box`, `/etc/xray-panel-cli/`
+- `/etc/sing-box/`, `/etc/config/sing-box`, `/etc/xray-panel-cli/` (включая `sources.json` для VPN Scout и поддиректорию `scans/` со снапшотами проб)
+- `/etc/config/switch-button` — Phase 4 хранит `func=xray` тут когда Side switch ON; без этого после restore состояние биндинга было бы рассогласовано с `sing-box.config.bind_switch`
 - `/etc/init.d/sing-box`, `/etc/init.d/xray-panel-cli`
 - `/etc/hotplug.d/button/50-sing-box-switch`
 - `/etc/sysctl.d/99-disable-mptcp.conf`
