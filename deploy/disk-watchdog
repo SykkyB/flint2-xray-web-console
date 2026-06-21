@@ -1,0 +1,117 @@
+#!/bin/sh
+# disk-watchdog — flash-resident health check for the USB backup disk and
+# Samba shares. Unlike /mnt/sda1/watchdog/watchdog.sh (which lives ON the
+# USB disk and dies with it), this script and its Telegram config live on
+# the router's internal flash, so it keeps watching — and can alert — even
+# when the disk drops off the USB bus.
+#
+# It also SELF-HEALS:
+#   - remounts /mnt/sda1 when the disk is present but GL mounted it only at
+#     /tmp/mountd/disk1_part1 (the recurring race after a reseat);
+#   - recreates Samba runtime dirs + restarts smbd if it crashed
+#     (reinit_after_fork / NT_STATUS_DISK_FULL after tmpfs reset).
+#
+# Telegram alerts fire on DOWN (after N consecutive fails) and on RECOVERED,
+# matching the format of the main watchdog. Run from cron every minute.
+
+set -u
+
+CONFIG="/etc/disk-watchdog.env"
+STATE_DIR="/tmp/disk-watchdog-state"
+LOG="/tmp/disk-watchdog.log"
+FAIL_THRESHOLD=3
+LAYER="DISK"
+PROBE_TYPE="flash watchdog"
+MNT="/mnt/sda1"
+DEV="/dev/sda1"
+GL_MNT="/tmp/mountd/disk1_part1"
+
+# shellcheck disable=SC1090
+. "$CONFIG"
+mkdir -p "$STATE_DIR"
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+
+send_card() {
+    emoji="$1"; title="$2"; service="$3"; detail="$4"
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    msg="${emoji} <b>${title}</b> — ${LAYER}
+━━━━━━━━━━━━━━━━
+🖥  <b>From:</b> <code>${HOST_LABEL}</code> (${PROBE_TYPE})
+📦 <b>Service:</b> <code>${service}</code>
+ℹ️  <b>Detail:</b> ${detail}
+🕒 <b>Time:</b> ${ts}"
+    curl -fsS --max-time 10 \
+        --data-urlencode "chat_id=${TG_CHAT_ID}" \
+        --data-urlencode "text=${msg}" \
+        --data-urlencode "parse_mode=HTML" \
+        --data-urlencode "disable_web_page_preview=true" \
+        "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -o /dev/null 2>&1 \
+        || log "telegram notify failed: $title $service"
+}
+
+check() {
+    name="$1"; cmd="$2"
+    state_file="$STATE_DIR/$name"
+    alerted_file="$STATE_DIR/$name.alerted"
+    if eval "$cmd" >/dev/null 2>&1; then
+        echo 0 > "$state_file"
+        if [ -f "$alerted_file" ] && [ "$(cat "$alerted_file")" = "DOWN" ]; then
+            send_card "🟢" "RECOVERED" "$name" "back online"
+            echo "UP" > "$alerted_file"
+            log "$name RECOVERED"
+        fi
+    else
+        prev=$(cat "$state_file" 2>/dev/null || echo 0)
+        new=$((prev + 1))
+        echo "$new" > "$state_file"
+        log "$name fail #$new"
+        if [ "$new" -ge "$FAIL_THRESHOLD" ]; then
+            if [ ! -f "$alerted_file" ] || [ "$(cat "$alerted_file")" != "DOWN" ]; then
+                send_card "🔴" "DOWN" "$name" "${new} consecutive failed checks (self-heal also failed)"
+                echo "DOWN" > "$alerted_file"
+                log "$name DOWN alert sent"
+            fi
+        fi
+    fi
+}
+
+# --- backup disk: mounted at /mnt/sda1 AND writable; self-heal remount ---
+disk_writable() {
+    if mount | grep -q " on $MNT "; then
+        t="$MNT/.dw_test_$$"
+        touch "$t" 2>/dev/null && rm -f "$t" 2>/dev/null && return 0
+    fi
+    return 1
+}
+disk_ok() {
+    disk_writable && return 0
+    # not mounted/writable — try to (re)mount if the block device is present
+    if [ -b "$DEV" ]; then
+        mkdir -p "$MNT"
+        mount "$DEV" "$MNT" 2>/dev/null
+        disk_writable && { log "self-heal: remounted $MNT"; return 0; }
+    fi
+    return 1
+}
+
+# --- samba: smbd alive + listening on 445; self-heal dirs + restart ---
+samba_healthy() {
+    # busybox pgrep -x is unreliable; match via ps instead.
+    ps w 2>/dev/null | grep -q '[s]mbd' || return 1
+    netstat -ltn 2>/dev/null | grep -q ':445' || return 1
+    [ -d "$GL_MNT" ] || [ -d "$MNT/downloads_ptp" ] || return 1
+    return 0
+}
+samba_ok() {
+    samba_healthy && return 0
+    mkdir -p /var/lib/samba/private /var/run/samba/msg.lock /var/lock /var/cache/samba
+    /etc/init.d/samba4 restart >/dev/null 2>&1
+    sleep 2
+    samba_healthy && { log "self-heal: restarted samba"; return 0; }
+    return 1
+}
+
+check "backup_disk"  "disk_ok"
+check "samba_shares" "samba_ok"
+exit 0

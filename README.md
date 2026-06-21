@@ -8,7 +8,9 @@ See [HANDOFF.md](HANDOFF.md) for the full design and rationale.
 
 ## Status
 
-Early scaffold. Not yet functional.
+Deployed and in production on the Flint 2 (panel on `192.168.100.1:9092`,
+xray inbound on `:9443`). See [HOME-INFRA.md](HOME-INFRA.md) for the full
+home-lab infrastructure, monitoring and backup/recovery runbook.
 
 ## Build
 

@@ -73,6 +73,15 @@
 - **Покрывает:** ryzen целиком мёртв ИЛИ Immich контейнер не отвечает по HTTP
 - **Лог:** `/mnt/sda1/watchdog/watchdog.log`
 
+### Layer 2b — DISK (flint2 disk-watchdog) — добавлено 2026-06-21
+- **Где:** `/usr/sbin/disk-watchdog` на **внутренней флешке** (НЕ на `/mnt/sda1`!), TG-конфиг `/etc/disk-watchdog.env`. В git: `deploy/disk-watchdog`.
+- **Cron:** `* * * * *` (root crontab)
+- **Что:** проверяет (1) USB-бэкап-диск `/mnt/sda1` примонтирован + пишется; (2) Samba: smbd жив + порт 445 + пути шар.
+- **Самолечение:** если диск присутствует, но не примонтирован в `/mnt/sda1` (частая гонка GL-mountd после reseat) — сам перемонтирует; если smbd упал (`reinit_after_fork`/tmpfs) — пересоздаёт `/var/lib/samba/private` и др. + рестартит samba.
+- **Алерт:** 3 фейла подряд → 🔴 в `flint2-watchdog`-бот, 🟢 RECOVERED при возврате. Формат как у Layer 2.
+- **Почему отдельно от Layer 2:** основной watchdog живёт на самом USB-диске и умирает вместе с ним; этот — на флешке, поэтому может детектить и алертить пропажу диска.
+- **Лог:** `/tmp/disk-watchdog.log`, state `/tmp/disk-watchdog-state/`.
+
 ### Layer 3 — EXTERNAL (exit1.dev + Cloudflare Worker)
 - **Сервис мониторинга:** [exit1.dev](https://app.exit1.dev/) (free, 10 мониторов, 5-мин интервал)
 - **Чек:** Web Keyword `https://immich.sys-lab.xyz:8443/api/server/ping` ищет `pong`. Регион Frankfurt.
@@ -153,8 +162,11 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 
 **Что бэкапится с flint2 (локально):**
 - `/etc/config/` (UCI), `/etc/dropbear/` (SSH-ключи), `/etc/{passwd,shadow,group,crontabs}`, `/etc/firewall.user`, `/etc/rc.local`
+- `/etc/AdGuardHome/` (DNS rewrites, client-исключения — добавлено 2026-06-21 после потери при чистой перешивке)
+- `/etc/samba/` (smbpasswd — пароли samba-юзеров; добавлено 2026-06-21)
 - `/root/`
-- `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`
+- `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`
+- `/etc/disk-watchdog.env` (TG-конфиг flash-watchdog)
 - `/mnt/sda1/watchdog/{watchdog.sh,config.env}`
 - crontab snapshot
 
@@ -285,6 +297,12 @@ sys-lab-home-backups/
 ├── system-snapshots/                                     ← Pipeline 1 (daily)
 │   └── system-config-2026-06-03_2357.tar.gz.enc         (ШИФРОВАНО, ~50 KB)
 │
+├── xray-snapshots/                                       ← xray-panel-backup (с 2026-06-21)
+│   └── 2026-06-21_1509.tar.gz.enc                        (ШИФРОВАНО, ~15 MB: xray+panel+reality)
+│
+├── flint2-prefw/                                         ← разовый pre-firmware снапшот
+│   └── flint2-prefw-2026-06-21_0126.tar.gz.enc          (перед апгрейдом 4.9.0)
+│
 ├── beryl-snapshots/                                      ← Pipeline 2+3
 │   ├── beryl-self-20260504-194152Z.tar.gz               (~16 MB, beryl-self)
 │   └── beryl-20260504-193555Z.tar.gz                    (~16 MB, Mac-side)
@@ -364,7 +382,31 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 **Нет в бэкапе** (надо восстановить вручную или с другого источника):
 - Прошивка GL.iNet — переустановить с офсайта
 - Базовый WAN/LAN setup — через GL.iNet UI
-- xray-panel + xray-binary — отдельный pipeline `xray-panel-backup` (snapshots в `/mnt/sda1/xray-backup/snapshots/`, тоже в R2 не уходит — отдельная история)
+- xray-panel + xray-binary — отдельный pipeline `xray-panel-backup`. Локальные snapshots в `/mnt/sda1/xray-backup/snapshots/` (plaintext), **с 2026-06-21 ШИФРУЕТ и льёт в R2** `xray-snapshots/` (retention 180д, ключ тот же `/etc/system-backup.pass`). Раньше offsite не уходил — из-за этого reality-ключи чуть не потерялись при смерти USB-диска.
+
+### 5.1c Апгрейд прошивки flint2 + U-Boot recovery (урок 2026-06-21)
+
+**Главное правило: апгрейд прошивки делать ТОЛЬКО при наличии свежего offsite-бэкапа (R2).** Даже режим «Keep settings» сносит наши бинари/скрипты.
+
+**Что переживает sysupgrade (keep settings):** только `sysupgrade -l` keep-list — `/etc/config/*` (вкл. xray, wireguard_server, dhcp, firewall, samba4), `/etc/xray/config.json`, `/etc/crontabs/root`, dropbear-ключи, passwd/shadow.
+**Что НЕ переживает (восстанавливать вручную):** `/usr/bin/{xray,xray-panel}`, `/etc/init.d/{xray,xray-panel}`, `/etc/xray-panel/`, `/www/xray-panel-launcher.js` + патч `gl_home.html`, `/usr/sbin/*backup` + `disk-watchdog`, `/etc/rclone/`, `/etc/system-backup.pass`, `/etc/AdGuardHome/config.yaml`, `/etc/samba/smbpasswd`, `/root/.ssh/id_ed25519`, openssh-client.
+
+**U-Boot recovery (если роутер не грузится / нужна чистая перешивка):**
+1. Ноут статиком `192.168.1.2/24`, кабель в LAN-порт.
+2. Выключить; зажать RESET, подать питание, держать ~8 сек пока LED не замигает часто.
+3. Браузер → `http://192.168.1.1` → залить `.bin` (хост прошивок: `https://fw.gl-inet.com/firmware/mt6000/release/`).
+4. Чистая прошивка → заводские (LAN `192.168.8.1`), мастер задаёт admin-пароль (= root SSH пароль).
+
+**После чистой перешивки — восстановление по этапам:**
+1. Почистить known_hosts (`ssh-keygen -R 192.168.100.1` — host-ключи сменились), вернуть свой+butler ssh-ключ в `/etc/dropbear/authorized_keys`.
+2. `/etc/config/*` (network/wireless/dhcp/firewall/wireguard_server/samba4) — из R2-снапшота (cherry-pick, не всё подряд — схемы 4.9.0 могут отличаться).
+3. xray-core + panel + scripts + rclone.conf + pass — из prefw-tarball; `deploy/install.sh flint2` для пере-патча `gl_home.html`.
+4. WG-сервер: положить `/etc/config/wireguard_server` с ключами → включить тумблер в UI (ключи сохранятся, клиенты не отвалятся).
+5. **Samba:** GL NAS UI НЕ создаёт юзеров из старой восстановленной БД → завести unix-юзеров вручную (`/etc/passwd`+`/etc/group`, shell `/bin/false`) + `smbpasswd -a -s`, упростить `samba4.@sambashare[].users` на прямые имена. Пароли samba нигде не бэкапятся восстановимо — задаются заново (и обновить на ryzen `/root/.smbcred`).
+6. **smbd падает `reinit_after_fork: NT_STATUS_DISK_FULL`** если нет рантайм-каталогов: `mkdir -p /var/lib/samba/private /var/run/samba/msg.lock /var/lock /var/cache/samba` (вписано в `/etc/rc.local`, т.к. /var→/tmp tmpfs; disk-watchdog тоже самолечит).
+7. Transmission — отдельный пакет (`opkg install transmission-daemon transmission-web`), в чистой прошивке не стоит.
+
+> ⚠️ USB-SSD (label `usbssd`) АППАРАТНО флакал в этот день (отваливался от шины 3+ раз) — при reseat монтируется в `/tmp/mountd/disk1_part1`, в `/mnt/sda1` возвращает disk-watchdog (Layer 2b) или вручную `mount /dev/sda1 /mnt/sda1`. Кандидат на замену.
 
 ### 5.2 Восстановление ryzen4700
 

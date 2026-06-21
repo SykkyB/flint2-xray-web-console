@@ -84,6 +84,31 @@ tar -czf "$OUT" $TAR_PATHS 2>>"$LOG_FILE"
 echo "$CURRENT_HASH" > "$STATE_FILE"
 log "snapshot $OUT (hash=$CURRENT_HASH)"
 
+# Offsite replication to Cloudflare R2. The local snapshot on the trusted USB
+# stays plaintext; the R2 copy is AES-256 encrypted because it carries reality
+# keys + panel config. Mirrors the pattern in system-config-backup.
+RCLONE=/mnt/sda1/rclone
+RCLONE_CONF=/etc/rclone/rclone.conf
+PASSFILE=/etc/system-backup.pass
+R2_REMOTE="r2:sys-lab-home-backups/xray-snapshots"
+R2_RETENTION_DAYS=180
+if [ -x "$RCLONE" ] && [ -f "$RCLONE_CONF" ] && [ -f "$PASSFILE" ]; then
+	ENC="$OUT.enc"
+	if openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$PASSFILE" -in "$OUT" -out "$ENC" 2>>"$LOG_FILE"; then
+		if "$RCLONE" --config "$RCLONE_CONF" copy --s3-no-head "$ENC" "$R2_REMOTE/" >>"$LOG_FILE" 2>&1; then
+			log "uploaded to R2: $R2_REMOTE/$(basename "$ENC")"
+		else
+			log "R2 upload FAILED (see lines above)"
+		fi
+		rm -f "$ENC"
+		"$RCLONE" --config "$RCLONE_CONF" delete --min-age "${R2_RETENTION_DAYS}d" "$R2_REMOTE/" >>"$LOG_FILE" 2>&1 || true
+	else
+		log "WARN: encryption failed — skipping R2 upload"
+	fi
+else
+	log "rclone/pass not available — skipping R2 upload"
+fi
+
 # Retention: delete oldest beyond RETENTION.
 ls -1t "$SNAP_DIR"/*.tar.gz 2>/dev/null | awk -v n="$RETENTION" 'NR>n' | while read -r old; do
 	rm -f "$old"
