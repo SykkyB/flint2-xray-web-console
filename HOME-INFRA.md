@@ -412,6 +412,7 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
    uci delete minidlna.config.media_dir; uci add_list minidlna.config.media_dir=/mnt/sda1/downloads_ptp
    uci commit minidlna; mkdir -p /mnt/sda1/.minidlna-db; /etc/init.d/minidlna enable; /etc/init.d/minidlna restart
    ```
+9. **immich port-forward (WAN 8443 → ryzen 192.168.100.5:8443)** — создаётся в UI (Security → Port Forwarding → +Add: TCP, ext 8443, IP 192.168.100.5, int 8443). Хранится в `/etc/config/port_forward` (НЕ в firewall!). В 4.9.0 проброс работает через **kernel-модуль `port_forward`** (`/proc/port_forward`, write-only) — **в iptables его НЕ видно, это норма**. ВАЖНО: модуль не всегда грузится на буте сам → нужен `/etc/modules.d/99-port_forward` (содержит `port_forward`), иначе UI-запись висит, но не пробрасывает. Проверка (с любого хоста): `curl -k --resolve immich.sys-lab.xyz:8443:<WAN_IP> https://immich.sys-lab.xyz:8443/api/server/ping` → 200. На него завязан external-монитор Layer 3 (exit1.dev). Порт 8443 при этом занят и админкой роутера (uhttpd) — модуль перехватывает раньше, конфликта нет.
 
 > ⚠️ USB-SSD (label `usbssd`) АППАРАТНО флакал в этот день (отваливался от шины 3+ раз) — при reseat монтируется в `/tmp/mountd/disk1_part1`, в `/mnt/sda1` возвращает disk-watchdog (Layer 2b) или вручную `mount /dev/sda1 /mnt/sda1`. Кандидат на замену.
 
