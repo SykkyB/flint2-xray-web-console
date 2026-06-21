@@ -405,6 +405,7 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 5. **Samba:** GL NAS UI НЕ создаёт юзеров из старой восстановленной БД → завести unix-юзеров вручную (`/etc/passwd`+`/etc/group`, shell `/bin/false`) + `smbpasswd -a -s`, упростить `samba4.@sambashare[].users` на прямые имена. Пароли samba нигде не бэкапятся восстановимо — задаются заново (и обновить на ryzen `/root/.smbcred`).
 6. **smbd падает `reinit_after_fork: NT_STATUS_DISK_FULL`** если нет рантайм-каталогов: `mkdir -p /var/lib/samba/private /var/run/samba/msg.lock /var/lock /var/cache/samba` (вписано в `/etc/rc.local`, т.к. /var→/tmp tmpfs; disk-watchdog тоже самолечит).
 7. Transmission — отдельный пакет (`opkg install transmission-daemon transmission-web`), в чистой прошивке не стоит.
+8. **minidlna/DLNA**: чистая прошивка включает его (`minidlna.config.enabled=1`) с `db_dir=/var/run/minidlna` (tmpfs) и `media_dir`=весь диск → строит индекс на сотни МБ в `/tmp`, забивает tmpfs до 100% и валит бэкапы/samba. В норме DLNA ВЫКЛЮЧЕН (`uci set minidlna.config.enabled=0; uci commit; /etc/init.d/minidlna disable`) — медиа раздаёт Jellyfin на ryzen.
 
 > ⚠️ USB-SSD (label `usbssd`) АППАРАТНО флакал в этот день (отваливался от шины 3+ раз) — при reseat монтируется в `/tmp/mountd/disk1_part1`, в `/mnt/sda1` возвращает disk-watchdog (Layer 2b) или вручную `mount /dev/sda1 /mnt/sda1`. Кандидат на замену.
 
