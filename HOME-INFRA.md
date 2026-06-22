@@ -208,14 +208,16 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 0 4 * * 0 /usr/sbin/beryl-config-backup
 ```
 
-**Что бэкапится:**
-- `/usr/bin/sing-box`, `/usr/bin/xray-panel-cli`
-- `/etc/sing-box/`, `/etc/config/sing-box`, `/etc/xray-panel-cli/` (включая `sources.json` для VPN Scout и поддиректорию `scans/` со снапшотами проб)
-- `/etc/config/switch-button` — Phase 4 хранит `func=xray` тут когда Side switch ON; без этого после restore состояние биндинга было бы рассогласовано с `sing-box.config.bind_switch`
-- `/etc/init.d/sing-box`, `/etc/init.d/xray-panel-cli`
-- `/etc/hotplug.d/button/50-sing-box-switch`
-- `/etc/sysctl.d/99-disable-mptcp.conf`
-- `/www/xray-panel-launcher.js`, `/www/gl_home.html`, `/www/gl_home.html.bak` (GL.iNet UI launcher injection)
+**Что бэкапится (скоуп расширен 2026-06-22 после инцидента с MT6000 — чтобы чистая перешивка beryl была полностью восстановима, а не только наш деплой):**
+- **`/etc/config`** целиком (network, wireless, dhcp, firewall, **wireguard_server** с ключами, adguardhome, samba4, sing-box, switch-button, …)
+- `/etc/AdGuardHome/config.yaml` (кастом DNS rewrites/clients), `/etc/xray/` (config.json)
+- `/etc/dropbear/` (ssh host-ключи + authorized_keys), `/etc/{passwd,shadow,group}`, `/etc/crontabs`
+- `/etc/rclone` (R2-креды), `/etc/openvpn`, `/etc/wireguard` (AmneziaWG-параметры если включат), `/root`
+- `/usr/bin/{sing-box,xray-panel-cli}`, `/etc/sing-box/`, `/etc/xray-panel-cli/` (вкл. `sources.json` для VPN Scout + `scans/`)
+- `/etc/init.d/{sing-box,xray-panel-cli}`, `/etc/hotplug.d/button/50-sing-box-switch`, `/etc/sysctl.d/99-disable-mptcp.conf`
+- `/www/xray-panel-launcher.js`, `/www/gl_home.html`, `/www/gl_home.html.bak`
+
+**Шифрование (с 2026-06-22):** скоуп теперь содержит секреты (WG-приватключи, ssh, shadow), поэтому снапшот **AES-256 шифруется** перед заливкой в R2 (fail-closed — при сбое шифрования upload отменяется). Пароль: `beryl:/etc/beryl-backup.pass` (= `flint2:/etc/system-backup.pass`, дубль в 1Password). Файлы в R2: `beryl-self-*.tar.gz.enc`. Хеш-детектор использует `find -exec sha256sum` (устойчив к кавычкам в именах).
 
 **Поведение:**
 | Состояние beryl | Что произойдёт |
