@@ -10,7 +10,7 @@
 | Hostname | Role | Subnet | OS | SSH alias |
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
-| **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
+| **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
 | **beryl** | travel-роутер, sing-box VPN-клиент | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000) | `beryl` |
 
 Доменные имена (через DNS sys-lab.xyz):
@@ -43,7 +43,7 @@
 ### Layer 1 — INTERNAL (ryzen4700-watchdog)
 - **Где:** `/home/sykkyb/watchdog/` на ryzen4700
 - **Cron:** `* * * * *` (каждую минуту), пользовательский cron sykkyb
-- **Что:** `docker inspect` для whitelist'а: immich_server, immich_machine_learning, immich_postgres, immich_redis, vanilla-sky-monitor, vanilla-sky-redirect, cloudflared
+- **Что:** `docker inspect` для whitelist'а: immich_server, immich_machine_learning, immich_postgres, immich_redis, vanilla-sky-monitor, vanilla-sky-redirect, cloudflared, **domovoy**, **mealie**
 - **Триггер:** контейнер не в state=running ИЛИ Health=unhealthy три раза подряд
 - **Лог:** `/home/sykkyb/watchdog/watchdog.log` (только фейлы и переходы)
 
@@ -284,6 +284,22 @@ scripts/backup.sh other     # цель custom SSH alias
 
 **Restore:** см. 5.7.
 
+### Pipeline 6 — domovoy (секреты + данные бота + книга рецептов Mealie)
+
+Бэкап голосового помощника domovoy (репо `github.com/SykkyB/domovoy`, деплой `ryzen4700:~/domovoy`) и связанного Mealie (`ryzen4700:~/domovoy/mealie`). Код — на GitHub; здесь бэкапятся секреты и пользовательские данные, которых нет в git.
+
+**Скрипт (в репо domovoy, cron sykkyb на ryzen):**
+- `backup.sh` — `45 4 * * 0` (еженедельно, вс). Собирает в один **зашифрованный** (`openssl AES-256`) блоб `domovoy-backup.tgz.enc`:
+  - `.env` — токены (бота, `CLAUDE_CODE_OAUTH_TOKEN`, `MEALIE_TOKEN`, Google calendar id, whitelist)
+  - `data/` бота — `domovoy.db` (списки/напоминания), `google_token.json` (OAuth Calendar)
+  - `mealie/data/` — рецепты + картинки + `mealie.db`
+  - **исключено:** модели whisper (`data/whisper-models`, перекачиваются сами)
+- **Root-владелые тома** (data/ и mealie/data владеет root) читаются через `docker exec tar` / `docker cp` — на ryzen нет passwordless sudo.
+- **Две точки:** `flint2:/mnt/sda1/domovoy-backup/` (одна перезаписываемая копия по butler-ssh-ключу) **и** R2 `domovoy-snapshots/` (таймстемп-имена, ротация 180д).
+- **Общие с butler** пароль шифрования (`~/butler-home-ai/.backup-pass`) и ssh-ключ к flint2 (`~/butler-home-ai/secrets/ssh/id_ed25519`). Креды R2 (основной бакет) — `~/domovoy/.r2.env` (`RCLONE_CONFIG_R2_*`, chmod 600, gitignored).
+
+**Restore:** см. 5.8.
+
 ---
 
 ## 4. Cloudflare R2 — структура хранилища
@@ -308,6 +324,9 @@ sys-lab-home-backups/
 ├── beryl-snapshots/                                      ← Pipeline 2+3
 │   ├── beryl-self-20260504-194152Z.tar.gz               (~16 MB, beryl-self)
 │   └── beryl-20260504-193555Z.tar.gz                    (~16 MB, Mac-side)
+│
+├── domovoy-snapshots/                                    ← Pipeline 6 (weekly)
+│   └── domovoy-backup-20260628-194825Z.tgz.enc          (ШИФРОВАНО, ~210 KB: .env+db+google+рецепты)
 │
 └── snapshots/                                            ← разовый ad-hoc
     └── watchdog-config-2026-05-04_2215.tar.gz           (исторический)
@@ -597,6 +616,41 @@ docker compose up -d --build
 
 > Зависимости: Telegram 2FA на аккаунте, токен бота (@BotFather), OAuth-токен Claude (`claude setup-token`), R2-токен `butler-audit`. Все перевыпускаемы; либо в расшифрованном `.env`/`.audit-r2.env`.
 
+### 5.8 Восстановление domovoy (+ Mealie)
+
+```bash
+# 1. Клонируем репо (код — на GitHub) и общую docker-сеть
+git clone git@github.com:SykkyB/domovoy.git ~/domovoy
+docker network create domovoy-net          # если ещё нет
+
+# 2. Берём зашифрованный блоб (с flint2 или R2) и расшифровываем
+#    (пароль — общий с butler: "butler-home-ai backup pass" из зашифрованных заметок)
+scp flint2:/mnt/sda1/domovoy-backup/domovoy-backup.tgz.enc .
+#    либо: rclone copy r2:sys-lab-home-backups/domovoy-snapshots/<свежий>.tgz.enc .
+openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:'<ПАРОЛЬ_ИЗ_ЗАМЕТОК>' \
+  -in domovoy-backup.tgz.enc | tar xzf -      # вернёт env, domovoy-data/, mealie-data/
+
+# 3. Раскладываем секреты и данные
+cp env ~/domovoy/.env
+mkdir -p ~/domovoy/data ~/domovoy/mealie/data
+
+# 4. Поднимаем Mealie (его данные кладём в том) и бота
+cp -a mealie-data/. ~/domovoy/mealie/data/
+cd ~/domovoy/mealie && docker compose up -d
+cd ~/domovoy && docker compose up -d --build
+#    domovoy.db и google_token.json кладутся в /data контейнера через docker cp:
+docker cp domovoy-data/domovoy.db        domovoy:/data/domovoy.db
+docker cp domovoy-data/google_token.json domovoy:/data/google_token.json
+docker compose restart domovoy
+
+# 5. Вернуть R2-креды для бэкапа и cron
+#    ~/domovoy/.r2.env (из ~/.r2-creds.env на Mac, формат RCLONE_CONFIG_R2_*), chmod 600
+#    cron: 45 4 * * 0 /home/sykkyb/domovoy/backup.sh
+#    watchdog: добавить domovoy, mealie в ~/watchdog/watchdog.sh (массив CONTAINERS)
+```
+
+> Зависимости: токен бота (@BotFather), OAuth Claude (общий с butler, `claude setup-token`), Google OAuth (`tools/google_auth.py` заново, если token.json потерян — нужен `client_secret.json` из Google Cloud), Mealie API-токен (web → API Tokens, если потерян). Модели whisper скачаются сами при первом голосовом. Whisper-кэш и БД списков — не критичны (списки эфемерны), главное — `.env`, `google_token.json` и рецепты Mealie.
+
 ---
 
 ## 6. Routine ops
@@ -775,6 +829,11 @@ client
 | **butler** SSH-ключ агента (root на flint2, `from=` на ryzen) | `ryzen4700:~/butler-home-ai/secrets/ssh/id_ed25519`; pub — в authorized_keys на ryzen/flint2 |
 | **butler** R2-креды (бакет `butler-audit`) | `ryzen4700:~/butler-home-ai/.audit-r2.env` |
 | **butler** пароль шифрования секрет-бэкапа | `ryzen4700:~/butler-home-ai/.backup-pass` (chmod 600) + **зашифрованные заметки** |
+| **domovoy** TG bot token + Claude OAuth + Google calendar id + whitelist | `ryzen4700:~/domovoy/.env` (отдельный bot; Claude OAuth — тот же что у butler) |
+| **domovoy** Google Calendar OAuth token | `ryzen4700:~/domovoy/data/google_token.json` (+ `client_secret.json`); GCP-проект `domovoy-ai` |
+| **domovoy** Mealie API token | `ryzen4700:~/domovoy/.env` (`MEALIE_TOKEN`); Mealie web `http://192.168.100.5:9925`, дефолт-логин `changeme@example.com` |
+| **domovoy** R2-креды (основной бакет) | `ryzen4700:~/domovoy/.r2.env` (`RCLONE_CONFIG_R2_*`, chmod 600) = `~/.r2-creds.env` на Mac |
+| **domovoy** пароль шифрования бэкапа | = butler (`~/butler-home-ai/.backup-pass`) + **зашифрованные заметки** |
 | **system-config-backup** пароль шифрования снапшота | `flint2:/etc/system-backup.pass` (chmod 600) + **зашифрованные заметки** |
 
 **Ничего из этого не должно попасть в git.** Все паттерны секретов ловятся .gitignore'ами в соответствующих репах.
