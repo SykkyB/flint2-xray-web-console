@@ -16,6 +16,7 @@
 Доменные имена (через DNS sys-lab.xyz):
 - `immich.sys-lab.xyz:8443` → ryzen4700, через XRAY на flint2
 - `vpn.sys-lab.xyz:8443` → flint2, XRAY VLESS+Reality для VPN-клиентов
+- `kitchen.sys-lab.xyz` → Mealie (рецепты domovoy) на ryzen, **через Cloudflare Tunnel** (cloudflared, published application route → `http://mealie:9000`, mealie в сети `proxy`) + **Cloudflare Access** (email-OTP, политика `household` = твой+женин email). TLS на edge Cloudflare, без проброса портов. API бота к Mealie идёт внутри docker (`http://mealie:9000`), мимо Access.
 - Публичный IP: `176.221.192.204` (домашний провайдер на flint2)
 
 ---
