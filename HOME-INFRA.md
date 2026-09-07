@@ -46,7 +46,15 @@
 - **Cron:** `* * * * *` (каждую минуту), пользовательский cron sykkyb
 - **Что:** `docker inspect` для whitelist'а: immich_server, immich_machine_learning, immich_postgres, immich_redis, vanilla-sky-monitor, vanilla-sky-redirect, cloudflared, **domovoy**, **mealie**
 - **Триггер:** контейнер не в state=running ИЛИ Health=unhealthy три раза подряд
+- **Плюс не-докерные чеки:** `mount_media` (`/mnt/media` примонтирован) и `backup_immich` (свежесть rsnapshot, добавлено 2026-08-10)
 - **Лог:** `/home/sykkyb/watchdog/watchdog.log` (только фейлы и переходы)
+
+**Чек `backup_immich`** (добавлен 2026-08-10 после того, как ротация молча стояла 50 дней — см. Pipeline 7):
+- Парсит `/var/log/rsnapshot.log`, берёт последний `rsnapshot daily: completed` (строка `completed successfully` **или** `completed, but with some warnings` — второе штатно, это просто вывод rsync `--info=progress2`).
+- Фейл, если последний успех старше `MAX_BACKUP_AGE_H=30` часов (daily-крон в 04:30 → при сбое алёрт приходит в тот же день к ~10:30).
+- Лог ротируется помесячно, поэтому при отсутствии успеха в текущем файле чек дочитывает `rsnapshot.log.1.gz` — иначе 1-го числа между 00:00 и 04:30 был бы ложный алёрт.
+- Специально **не** трогает `/backup`: у монта `x-systemd.automount` с `idle-timeout=600`, а проба раз в минуту держала бы CIFS-сессию к flint2 вечно живой.
+- В карточке алёрта: дата последнего успеха, возраст в днях и последняя строка `ERROR` из лога.
 
 **Layer 1 add-on — media-srv watchdog**
 - **Где:** `/opt/media-srv/scripts/watchdog-check.sh` (symlink в `/usr/local/bin/media-srv-watchdog`)
@@ -119,7 +127,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 
 ---
 
-## 3. Бэкапы — 5 независимых pipeline
+## 3. Бэкапы — 7 независимых pipeline
 
 ```
             ┌─────────────────────────────────────────────────┐
@@ -300,6 +308,52 @@ scripts/backup.sh other     # цель custom SSH alias
 - **Общие с butler** пароль шифрования (`~/butler-home-ai/.backup-pass`) и ssh-ключ к flint2 (`~/butler-home-ai/secrets/ssh/id_ed25519`). Креды R2 (основной бакет) — `~/domovoy/.r2.env` (`RCLONE_CONFIG_R2_*`, chmod 600, gitignored).
 
 **Restore:** см. 5.8.
+
+### Pipeline 7 — Immich (фотки) через rsnapshot
+
+Самый объёмный и самый важный pipeline: библиотека Immich (~180 GB) с ryzen на USB-диск flint2. **В R2 не уезжает** — слишком много.
+
+**Расположение:**
+- Конфиг: `/etc/rsnapshot.conf` на ryzen
+- Обёртка: `/usr/local/bin/rsnapshot-safe` — проверяет `mountpoint -q /backup` и шлёт письмо, если не примонтировано; иначе зовёт `rsnapshot "$@"`
+- Лог: `/var/log/rsnapshot.log` (ротация помесячно)
+- Приёмник: `flint2:/mnt/sda1/immich-backup/`, на ryzen смонтирован как `/backup` (CIFS, `x-systemd.automount`, креды `/root/.smbcred`, юзер samba `immichbckp`)
+
+**Cron на ryzen (`/etc/cron.d/rsnapshot`, root):**
+```
+30 4 * * * root /usr/local/bin/rsnapshot-safe daily
+0  6 * * 1 root /usr/local/bin/rsnapshot-safe weekly
+30 7 1 * * root /usr/local/bin/rsnapshot-safe monthly
+```
+
+**Что бэкапится:** `/srv/immich/library/` (исключая `thumbs/` и `encoded-video/` — derived), плюс `config/`: `.env`, `docker-compose.yml`, `Caddyfile`, бинарь и systemd-дропин caddy, сам `rsnapshot.conf`.
+
+**Retention:** `daily 7` + `weekly 4` + `monthly 6`. Снапшоты связаны хардлинками (`cp -al`), поэтому 7+4+6 копий занимают ~213 GB, а не ×17.
+
+**Как перетекают уровни (важно для понимания «сколько должно быть»):** rsnapshot **не** делает отдельный полный прогон для weekly/monthly — он двигает готовые снапшоты вверх. `daily.6` → `weekly.0`, `weekly.3` → `monthly.0`. Поэтому:
+- первый monthly появляется не сразу, а когда накопится 4 недельных (у нас: конфиг с 30.03.2026 → первый реальный monthly только 01.05.2026, прогон 01.04 отработал вхолостую);
+- полный набор из 6 месячных набирается примерно через 7 месяцев после старта;
+- если ротация сломалась — она сломалась на всех трёх уровнях сразу.
+
+**Инцидент 21.06.2026 — 50 дней без бэкапов (устранён 10.08.2026).** После апгрейда прошивки flint2 uci-конфиг samba перегенерился и **потерял `force_root='1'`** у шары `immich-backup`. Init-скрипт `/etc/init.d/samba4` пишет `force user = root` только при этом флаге, поэтому samba начала отдавать шару от unix-юзера `immichbckp` (uid 6002). Каталог `/mnt/sda1/immich-backup` — `root:root 0755`, значит `rm`/`mv`/`mkdir` **в корне шары** стали `Permission denied`, а запись внутрь уже существующих снапшотов (они `0777`) продолжала работать. Ротация падала на первом же шаге:
+```
+ERROR: Warning! /bin/rm failed.
+ERROR: Error! rm_rf("/backup/daily.6/")
+ERROR: Could not rename("/backup/monthly.1", "/backup/monthly.2")
+```
+Никто не заметил, потому что `rsnapshot-safe` алёртит только на «не примонтирован», а монт был живой; `MAILTO` в cron.d никуда не доставлялся.
+
+**Фикс (обязательно проверять после каждой перешивки flint2!):**
+```sh
+uci set samba4.@sambashare[2].force_root='1'   # индекс шары immich-backup — сверить через uci get ...name
+uci commit samba4
+/etc/init.d/samba4 restart
+```
+Проверка, что применилось — в `/etc/samba/smb.conf` у секции `[immich-backup]` должны быть `force user = root` и `force group = root`. Побочный эффект: init генерит `valid users` только в ветке без force_root, так что строка `valid users = immichbckp` из секции пропадает — шара остаётся закрытой через `guest ok = no`, но доступна любому samba-юзеру роутера.
+
+**Мониторинг:** чек `backup_immich` в Layer 1 (см. раздел 2) — алёрт, если последний успешный daily старше 30 часов.
+
+**Restore:** см. шаг 10 в разделе 5.
 
 ---
 
@@ -812,6 +866,57 @@ client
 
 ---
 
+### 6.8 Immich — DJI дрон-архив (external library) — добавлено 2026-08-04, обновлено 2026-09-07
+
+**Что:** архив съёмок дронов DJI Mini 2 (FC7203), Mini 3 Pro (FC3582) и Mini 5 Pro (FC9313), ~114 GB, 78 папок формата `<CC>_<Место>_<ДД.ММ.ГГГГ>` (префиксы `GEO_`/`TUR_`/`BUL_`/`ARM_`/`GR_`). Папка = альбом Immich.
+
+**Копии архива (2 шт., R2 нет — слишком большой):**
+- Primary: Mac, внешний SSD `NVME-SSD/DJI` (**NTFS через Tuxera** — драйвер спорадически кидает `Errno 22 Invalid argument` на create/rename; скрипты работы с ним — только с ретраями)
+- Вторая: `ryzen4700:/mnt/media/DJI` (WD 2TB, тот же диск что media-srv; помнить про mount-guard гонку при буте). Обе копии должны совпадать по `size+path` (проверка: `find -type f -printf "%s\t%p\n"` с обеих сторон + diff).
+- ⚠️ Папку, добавленную только на ryzen (без SSD), потом легко потерять из виду — так было с `GEO_Birtvisi-Canyon_08.08.2026` (жила только на ryzen с 10.08 по 07.09). Новое всегда сначала на SSD, потом rsync.
+
+**Immich-подключение:**
+- Volume в `/srv/immich/docker-compose.yml` (сервис immich-server): `- /mnt/media/DJI:/mnt/media/DJI:ro` (бэкап compose: `docker-compose.yml.bak-dji`; сам compose и так в system-config-backup)
+- External Library **"DJI Drone Archive"**, id `3e4a2765-bb9f-45ea-b8d7-134d932f2147`, owner AlexR. Дефолтные exclusion-паттерны (в т.ч. `**/._*`).
+- **Ночной скан библиотеки работает сам** (дефолтный cron Immich) — новые файлы в `/mnt/media/DJI` появляются в ленте без API-ключа. Ключ нужен только для скана «прямо сейчас» и для создания альбомов.
+- Лента Immich — по EXIF-дате съёмки, карта — по GPS. Фото имеют GPS всегда; видео Mini 3 Pro — GPS в `.SRT`-сайдкарах рядом с MP4 (Immich их не индексирует, лежат для истории); видео Mini 5 Pro — GPS нет, пока выключены субтитры → **включить в DJI Fly: ⚙️ → Камера → «Субтитры к видео»**.
+- Проверки без API-ключа — напрямую в Postgres (Immich v3, таблицы в единственном числе: `asset`, `album`, `album_asset`, `library`):
+```bash
+ssh ryzen4700 'docker exec immich_postgres psql -U postgresimi -d immich -tAc \
+  "select count(*) from asset where \"libraryId\"='"'"'3e4a2765-bb9f-45ea-b8d7-134d932f2147'"'"'"'   # ассетов в DJI-библиотеке
+ssh ryzen4700 'docker exec immich_postgres psql -U postgresimi -d immich -tAc "select \"albumName\" from album order by 1"'
+```
+
+**Инструмент:** `media-srv/scripts/dji-sort.py` (репо github.com/SykkyB/media-srv; запускается на Mac, нужен `exiftool`). Делает всё, что раньше было одноразовыми скриптами: инвентаризация источника → дедуп против архива (размер → SHA-256, кэш хэшей в `~/.cache/dji-sort/`) → кластеры «дата + ~3 км» → Nominatim → `plan.json` с предложенными папками → раскладка с ретраями на Errno 22, суффиксом `_N` при коллизии имён и SHA-256-верификацией копии.
+
+**Workflow добавления новых съёмок:**
+```bash
+# 0. Карта дрона монтируется как /Volumes/SD_Card (DCIM/DJI_001 = Mini 5 Pro). Читается ~8 MB/s — 10 GB ≈ 20 мин.
+# 1. План: что уже есть в архиве, что новое, куда класть
+python3 ~/Documents/projects/home-lab/ryzen4700-homesrv/media-srv/scripts/dji-sort.py analyze \
+  --src /Volumes/SD_Card/DCIM --archive /Volumes/NVME-SSD/DJI --plan ~/dji-plan.json
+# 2. Поправить "folder" у кластеров в plan.json (геокодер даёт ближайшее село — напр. «Avenisi» вместо «Ananuri»), затем:
+python3 .../dji-sort.py execute --plan ~/dji-plan.json        # копирует (карту не трогает), верифицирует SHA-256
+# 3. Долить на ryzen (это же печатает `dji-sort.py sync --archive /Volumes/NVME-SSD/DJI --run`):
+rsync -a --exclude='.DS_Store' --exclude='._*' /Volumes/NVME-SSD/DJI/ ryzen4700:/mnt/media/DJI/
+# 4. Скан библиотеки (или UI: Administration → External Libraries → Scan; или просто дождаться ночи):
+ssh ryzen4700 'curl -s -X POST -H "x-api-key: <ключ dji-library>" \
+  http://localhost:2283/api/libraries/3e4a2765-bb9f-45ea-b8d7-134d932f2147/scan'
+# 5. Карту чистить только после SHA-256-сверки с SSD и только по явному решению.
+```
+
+**Альбомы из папок** (альбом на каждую `GEO_..._дата`): community-тул `immich-folder-album-creator` (docker, one-shot, нужен ключ):
+```bash
+ssh ryzen4700 'docker run --rm --network immich_default \
+  -e API_URL=http://immich-server:2283/api -e API_KEY=<ключ dji-library> \
+  -e ROOT_PATH=/mnt/media/DJI -e ALBUM_LEVELS=1 \
+  salvoxia/immich-folder-album-creator:latest'
+```
+
+**Журнал пополнений:** 04–05.08.2026 полный разбор (76 папок, 1613 ассетов) · 10.08 `GEO_Birtvisi-Canyon_08.08.2026` (3 MP4, только на ryzen; на SSD доложена 07.09) · 07.09 `GEO_Ananuri_06.09.2026` (7 JPG + 8 MP4, Mini 5 Pro, второй визит) · 07.09 из `NVMe SSD/_EPAM_backup_2026/DJI` (копия архива от 03.08 со старыми именами папок) удалены 1065 файлов / 62 GiB после SHA-256-сверки с SSD + проверки наличия на ryzen (size+path) и в Immich (`asset.originalPath`); оставлен только `GEO_Batumi_16.12.2023/DJI_0487.MP4` — вариант того же видео с расхождением в одном блоке против оригинала с карты (в архиве оригинал).
+
+---
+
 ## 7. Где живут креды
 
 | Что | Где |
@@ -836,6 +941,7 @@ client
 | **domovoy** R2-креды (основной бакет) | `ryzen4700:~/domovoy/.r2.env` (`RCLONE_CONFIG_R2_*`, chmod 600) = `~/.r2-creds.env` на Mac |
 | **domovoy** пароль шифрования бэкапа | = butler (`~/butler-home-ai/.backup-pass`) + **зашифрованные заметки** |
 | **system-config-backup** пароль шифрования снапшота | `flint2:/etc/system-backup.pass` (chmod 600) + **зашифрованные заметки** |
+| **Immich API key `dji-library`** (админ; library-скан + альбом-скрипт, см. 6.8) | **зашифрованные заметки** (создан 2026-08-04 в Immich UI → Account Settings → API Keys; при утере — просто создать новый там же) |
 
 **Ничего из этого не должно попасть в git.** Все паттерны секретов ловятся .gitignore'ами в соответствующих репах.
 
@@ -849,3 +955,4 @@ client
 4. **Прошивка GL.iNet (flint2 + beryl) не бэкапится** — если флэшка испортится и прошивка слетит, надо ставить с офсайта GL.iNet, потом восстанавливать конфиги.
 5. **butler-home-ai после ребута ryzen** — `depends_on` соблюдается только при `docker compose up`, а не при авто-рестарте контейнеров по policy после ребута хоста. Теоретически возможны гонки старта (как было у searcharr). Редко; лечится ручным `docker compose up -d` или `/lockdown` на время.
 6. **Шифр-пароли бэкапов** (`/etc/system-backup.pass`, `~/butler-home-ai/.backup-pass`) — если потерять И хост, И зашифрованную заметку, R2-копии не расшифровать. Поэтому пароли обязательно дублируются в зашифрованных заметках.
+7. **DJI дрон-архив (~107 GB) не в облаке** — только 2 локальные копии: Mac SSD `NVME-SSD/DJI` + `ryzen4700:/mnt/media/DJI` (см. 6.8). Одновременная гибель обоих дисков = потеря архива. R2 не используется из-за объёма/цены. Флешки дрона чистятся после hash-верифицированного копирования — на них рассчитывать нельзя.
