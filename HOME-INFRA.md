@@ -897,12 +897,20 @@ python3 ~/Documents/projects/home-lab/ryzen4700-homesrv/media-srv/scripts/dji-so
   --src /Volumes/SD_Card/DCIM --archive /Volumes/NVME-SSD/DJI --plan ~/dji-plan.json
 # 2. Поправить "folder" у кластеров в plan.json (геокодер даёт ближайшее село — напр. «Avenisi» для съёмки у Жинвали/Ананури), затем:
 python3 .../dji-sort.py execute --plan ~/dji-plan.json        # копирует (карту не трогает), верифицирует SHA-256
-# 3. Долить на ryzen (это же печатает `dji-sort.py sync --archive /Volumes/NVME-SSD/DJI --run`):
+# 3. Долить на ryzen + скан + альбомы одной командой (ключ читает из ryzen:/srv/immich/.dji-library.key, на Mac не попадает):
+python3 .../dji-sort.py sync --archive /Volumes/NVME-SSD/DJI --run
+# …или руками, шаги 3–5:
 rsync -a --exclude='.DS_Store' --exclude='._*' /Volumes/NVME-SSD/DJI/ ryzen4700:/mnt/media/DJI/
 # 4. Скан библиотеки (или UI: Administration → External Libraries → Scan; или дождаться ночного cron — см. выше):
 ssh ryzen4700 'curl -s -X POST -H "x-api-key: <ключ dji-library>" \
   http://localhost:2283/api/libraries/3e4a2765-bb9f-45ea-b8d7-134d932f2147/scan'
 # 5. Карту чистить только после SHA-256-сверки с SSD и только по явному решению.
+```
+
+**Ключ `dji-library`:** Immich хранит только хэш — секрет показывается один раз при создании (Immich UI → аватар → Account Settings → API Keys → New API Key). Если потерян — просто создать новый с тем же именем (старый удалить). Хранить в двух местах: зашифрованные заметки + файл на ryzen, который использует `dji-sort.py sync --run`:
+```bash
+ssh ryzen4700 'umask 077; cat > /srv/immich/.dji-library.key'   # вставить ключ, Enter, Ctrl-D
+ssh ryzen4700 'ls -l /srv/immich/.dji-library.key; curl -s -o /dev/null -w "%{http_code}\n" -H "x-api-key: $(cat /srv/immich/.dji-library.key)" http://localhost:2283/api/users/me'   # 200 = ключ рабочий
 ```
 
 **Альбомы из папок** (альбом на каждую `GEO_..._дата`): community-тул `immich-folder-album-creator` (docker, one-shot, нужен ключ):
