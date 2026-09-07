@@ -917,9 +917,10 @@ ssh ryzen4700 'ls -l /srv/immich/.dji-library.key; curl -s -o /dev/null -w "%{ht
 ```bash
 ssh ryzen4700 'docker run --rm --network immich_default \
   -e API_URL=http://immich-server:2283/api -e API_KEY=<ключ dji-library> \
-  -e ROOT_PATH=/mnt/media/DJI -e ALBUM_LEVELS=1 \
+  -e ROOT_PATH=/mnt/media/DJI -e ALBUM_LEVELS=1 -e UNATTENDED=1 \
   salvoxia/immich-folder-album-creator:latest'
 ```
+Без `UNATTENDED=1` тул только печатает список альбомов (dry-run) и ничего не создаёт. Скан библиотеки асинхронный (15 файлов ≈ 10 с) — альбомы создавать после появления ассетов в БД, иначе альбом выйдет пустым; `dji-sort.py sync --run` ждёт сам.
 
 **Журнал пополнений:** 04–05.08.2026 полный разбор (76 папок, 1613 ассетов) · 10.08 `GEO_Birtvisi-Canyon_08.08.2026` (3 MP4, только на ryzen; на SSD доложена 07.09) · 07.09 `GEO_Jinvali_SAP_06.09.2026` (7 JPG + 8 MP4, Mini 5 Pro; геокодер предложил Avenisi/Ananuri — имя дал юзер) · 07.09 из `NVMe SSD/_EPAM_backup_2026/DJI` (копия архива от 03.08 со старыми именами папок) удалены 1065 файлов / 62 GiB после SHA-256-сверки с SSD + проверки наличия на ryzen (size+path) и в Immich (`asset.originalPath`); оставлен только `GEO_Batumi_16.12.2023/DJI_0487.MP4` — вариант того же видео с расхождением в одном блоке против оригинала с карты (в архиве оригинал).
 
