@@ -878,7 +878,7 @@ client
 **Immich-подключение:**
 - Volume в `/srv/immich/docker-compose.yml` (сервис immich-server): `- /mnt/media/DJI:/mnt/media/DJI:ro` (бэкап compose: `docker-compose.yml.bak-dji`; сам compose и так в system-config-backup)
 - External Library **"DJI Drone Archive"**, id `3e4a2765-bb9f-45ea-b8d7-134d932f2147`, owner AlexR. Дефолтные exclusion-паттерны (в т.ч. `**/._*`).
-- **Ночной скан библиотеки работает сам** (дефолтный cron Immich) — новые файлы в `/mnt/media/DJI` появляются в ленте без API-ключа. Ключ нужен только для скана «прямо сейчас» и для создания альбомов.
+- Скан библиотеки по расписанию: в `system-config` секция `library` пустая → дефолты Immich (`library.scan.enabled=true`, cron `0 0 * * *`, т.е. ночью). **Не проверено на практике** (Birtvisi 10.08 сканировался вручную через минуту после создания папки) — после первого «ночного» пополнения сверить `select count(*) from asset ...` утром. Ключ нужен для скана «прямо сейчас» и для создания альбомов.
 - Лента Immich — по EXIF-дате съёмки, карта — по GPS. Фото имеют GPS всегда; видео Mini 3 Pro — GPS в `.SRT`-сайдкарах рядом с MP4 (Immich их не индексирует, лежат для истории); видео Mini 5 Pro — GPS нет, пока выключены субтитры → **включить в DJI Fly: ⚙️ → Камера → «Субтитры к видео»**.
 - Проверки без API-ключа — напрямую в Postgres (Immich v3, таблицы в единственном числе: `asset`, `album`, `album_asset`, `library`):
 ```bash
@@ -899,7 +899,7 @@ python3 ~/Documents/projects/home-lab/ryzen4700-homesrv/media-srv/scripts/dji-so
 python3 .../dji-sort.py execute --plan ~/dji-plan.json        # копирует (карту не трогает), верифицирует SHA-256
 # 3. Долить на ryzen (это же печатает `dji-sort.py sync --archive /Volumes/NVME-SSD/DJI --run`):
 rsync -a --exclude='.DS_Store' --exclude='._*' /Volumes/NVME-SSD/DJI/ ryzen4700:/mnt/media/DJI/
-# 4. Скан библиотеки (или UI: Administration → External Libraries → Scan; или просто дождаться ночи):
+# 4. Скан библиотеки (или UI: Administration → External Libraries → Scan; или дождаться ночного cron — см. выше):
 ssh ryzen4700 'curl -s -X POST -H "x-api-key: <ключ dji-library>" \
   http://localhost:2283/api/libraries/3e4a2765-bb9f-45ea-b8d7-134d932f2147/scan'
 # 5. Карту чистить только после SHA-256-сверки с SSD и только по явному решению.
