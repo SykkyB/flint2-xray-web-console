@@ -895,7 +895,7 @@ ssh ryzen4700 'docker exec immich_postgres psql -U postgresimi -d immich -tAc "s
 # 1. План: что уже есть в архиве, что новое, куда класть
 python3 ~/Documents/projects/home-lab/ryzen4700-homesrv/media-srv/scripts/dji-sort.py analyze \
   --src /Volumes/SD_Card/DCIM --archive /Volumes/NVME-SSD/DJI --plan ~/dji-plan.json
-# 2. Поправить "folder" у кластеров в plan.json (геокодер даёт ближайшее село — напр. «Avenisi» вместо «Ananuri»), затем:
+# 2. Поправить "folder" у кластеров в plan.json (геокодер даёт ближайшее село — напр. «Avenisi» для съёмки у Жинвали/Ананури), затем:
 python3 .../dji-sort.py execute --plan ~/dji-plan.json        # копирует (карту не трогает), верифицирует SHA-256
 # 3. Долить на ryzen (это же печатает `dji-sort.py sync --archive /Volumes/NVME-SSD/DJI --run`):
 rsync -a --exclude='.DS_Store' --exclude='._*' /Volumes/NVME-SSD/DJI/ ryzen4700:/mnt/media/DJI/
@@ -913,7 +913,7 @@ ssh ryzen4700 'docker run --rm --network immich_default \
   salvoxia/immich-folder-album-creator:latest'
 ```
 
-**Журнал пополнений:** 04–05.08.2026 полный разбор (76 папок, 1613 ассетов) · 10.08 `GEO_Birtvisi-Canyon_08.08.2026` (3 MP4, только на ryzen; на SSD доложена 07.09) · 07.09 `GEO_Ananuri_06.09.2026` (7 JPG + 8 MP4, Mini 5 Pro, второй визит) · 07.09 из `NVMe SSD/_EPAM_backup_2026/DJI` (копия архива от 03.08 со старыми именами папок) удалены 1065 файлов / 62 GiB после SHA-256-сверки с SSD + проверки наличия на ryzen (size+path) и в Immich (`asset.originalPath`); оставлен только `GEO_Batumi_16.12.2023/DJI_0487.MP4` — вариант того же видео с расхождением в одном блоке против оригинала с карты (в архиве оригинал).
+**Журнал пополнений:** 04–05.08.2026 полный разбор (76 папок, 1613 ассетов) · 10.08 `GEO_Birtvisi-Canyon_08.08.2026` (3 MP4, только на ryzen; на SSD доложена 07.09) · 07.09 `GEO_Jinvali_SAP_06.09.2026` (7 JPG + 8 MP4, Mini 5 Pro; геокодер предложил Avenisi/Ananuri — имя дал юзер) · 07.09 из `NVMe SSD/_EPAM_backup_2026/DJI` (копия архива от 03.08 со старыми именами папок) удалены 1065 файлов / 62 GiB после SHA-256-сверки с SSD + проверки наличия на ryzen (size+path) и в Immich (`asset.originalPath`); оставлен только `GEO_Batumi_16.12.2023/DJI_0487.MP4` — вариант того же видео с расхождением в одном блоке против оригинала с карты (в архиве оригинал).
 
 ---
 
