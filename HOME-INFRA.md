@@ -892,6 +892,8 @@ ssh ryzen4700 'docker exec immich_postgres psql -U postgresimi -d immich -tAc "s
 **Workflow добавления новых съёмок:**
 ```bash
 # 0. Карта дрона монтируется как /Volumes/SD_Card (DCIM/DJI_001 = Mini 5 Pro). Читается ~8 MB/s — 10 GB ≈ 20 мин.
+#    --src указывать на DCIM/DJI_001, а не на DCIM: в DCIM/HYPERLAPSE/<NNN_XXXX>/ лежат сотни JPG-кадров, из которых дрон
+#    собирает hyperlapse-видео (само видео — обычный DJI_..._XXXX_D.MP4 в DJI_001). Кадры в архив не берём.
 # 1. План: что уже есть в архиве, что новое, куда класть
 python3 ~/Documents/projects/home-lab/ryzen4700-homesrv/media-srv/scripts/dji-sort.py analyze \
   --src /Volumes/SD_Card/DCIM --archive /Volumes/NVME-SSD/DJI --plan ~/dji-plan.json
@@ -922,7 +924,7 @@ ssh ryzen4700 'docker run --rm --network immich_default \
 ```
 Без `UNATTENDED=1` тул только печатает список альбомов (dry-run) и ничего не создаёт. Скан библиотеки асинхронный (15 файлов ≈ 10 с) — альбомы создавать после появления ассетов в БД, иначе альбом выйдет пустым; `dji-sort.py sync --run` ждёт сам.
 
-**Журнал пополнений:** 04–05.08.2026 полный разбор (76 папок, 1613 ассетов) · 10.08 `GEO_Birtvisi-Canyon_08.08.2026` (3 MP4, только на ryzen; на SSD доложена 07.09) · 07.09 `GEO_Jinvali_SAP_06.09.2026` (7 JPG + 8 MP4, Mini 5 Pro; геокодер предложил Avenisi/Ananuri — имя дал юзер) · 07.09 из `NVMe SSD/_EPAM_backup_2026/DJI` (копия архива от 03.08 со старыми именами папок) удалены 1065 файлов / 62 GiB после SHA-256-сверки с SSD + проверки наличия на ryzen (size+path) и в Immich (`asset.originalPath`); оставлен только `GEO_Batumi_16.12.2023/DJI_0487.MP4` — вариант того же видео с расхождением в одном блоке против оригинала с карты (в архиве оригинал).
+**Журнал пополнений:** 04–05.08.2026 полный разбор (76 папок, 1613 ассетов) · 10.08 `GEO_Birtvisi-Canyon_08.08.2026` (3 MP4, только на ryzen; на SSD доложена 07.09) · 07.09 `GEO_Jinvali_SAP_06.09.2026` (7 JPG + 8 MP4, Mini 5 Pro; геокодер предложил Avenisi/Ananuri — имя дал юзер) · 07.09 из `NVMe SSD/_EPAM_backup_2026/DJI` (копия архива от 03.08 со старыми именами папок) удалены 1065 файлов / 62 GiB после SHA-256-сверки с SSD + проверки наличия на ryzen (size+path) и в Immich (`asset.originalPath`); оставлен только `GEO_Batumi_16.12.2023/DJI_0487.MP4` — вариант того же видео с расхождением в одном блоке против оригинала с карты (в архиве оригинал). · 22.09 `GEO_Shdugra-Waterfalls_21.09.2026` (6 JPG + 10 MP4, Mini 5 Pro, Сванетия; первый полный прогон `dji-sort.py` analyze → execute → sync --run без ручных шагов).
 
 ---
 
