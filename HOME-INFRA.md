@@ -896,7 +896,7 @@ ssh ryzen4700 'docker exec immich_postgres psql -U postgresimi -d immich -tAc "s
 #    собирает hyperlapse-видео (само видео — обычный DJI_..._XXXX_D.MP4 в DJI_001). Кадры в архив не берём.
 # 1. План: что уже есть в архиве, что новое, куда класть
 python3 ~/Documents/projects/home-lab/ryzen4700-homesrv/media-srv/scripts/dji-sort.py analyze \
-  --src /Volumes/SD_Card/DCIM --archive /Volumes/NVME-SSD/DJI --plan ~/dji-plan.json
+  --src /Volumes/SD_Card/DCIM/DJI_001 --archive /Volumes/NVME-SSD/DJI --plan ~/dji-plan.json
 # 2. Поправить "folder" у кластеров в plan.json (геокодер даёт ближайшее село — напр. «Avenisi» для съёмки у Жинвали/Ананури), затем:
 python3 .../dji-sort.py execute --plan ~/dji-plan.json        # копирует (карту не трогает), верифицирует SHA-256
 # 3. Долить на ryzen + скан + альбомы одной командой (ключ читает из ryzen:/srv/immich/.dji-library.key, на Mac не попадает):
