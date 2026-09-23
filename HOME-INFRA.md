@@ -14,7 +14,9 @@
 | **beryl** | travel-роутер, sing-box VPN-клиент | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000) | `beryl` |
 
 Доменные имена (через DNS sys-lab.xyz):
-- `immich.sys-lab.xyz:8443` → ryzen4700, через XRAY на flint2
+- `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
+- `jellyfin.media.sys-lab.xyz:8443` → ryzen4700 (тот же DNAT, Caddy :8443 → jellyfin:8096), **добавлено 2026-09-23**, см. 6.7b
+- `seerr.media.sys-lab.xyz:8443` → ryzen4700 (тот же DNAT, Caddy :8443 → seerr:5055), **добавлено 2026-09-23**, см. 6.7b
 - `vpn.sys-lab.xyz:8443` → flint2, XRAY VLESS+Reality для VPN-клиентов
 - `kitchen.sys-lab.xyz` → Mealie (рецепты domovoy) на ryzen, **через Cloudflare Tunnel** (cloudflared, published application route → `http://mealie:9000`, mealie в сети `proxy`) + **Cloudflare Access** (email-OTP, политика `household` = твой+женин email). TLS на edge Cloudflare, без проброса портов. API бота к Mealie идёт внутри docker (`http://mealie:9000`), мимо Access.
 - Публичный IP: `176.221.192.204` (домашний провайдер на flint2)
@@ -78,8 +80,8 @@
 ### Layer 2 — LAN (flint2-watchdog)
 - **Где:** `/mnt/sda1/watchdog/` на flint2
 - **Cron:** `* * * * *` (root crontab)
-- **Что:** ping 192.168.100.5 + curl `http://192.168.100.5:2283/api/server/ping`
-- **Покрывает:** ryzen целиком мёртв ИЛИ Immich контейнер не отвечает по HTTP
+- **Что:** ping 192.168.100.5 + curl `http://192.168.100.5:2283/api/server/ping` + curl `https://jellyfin.media.sys-lab.xyz:8443/health` (с `--resolve` на 192.168.100.5; проверяет путь Caddy:8443 → Jellyfin, чек `jellyfin_lan_http`, добавлен 2026-09-23)
+- **Покрывает:** ryzen целиком мёртв ИЛИ Immich контейнер не отвечает по HTTP ИЛИ Caddy:8443/Jellyfin не отвечает
 - **Лог:** `/mnt/sda1/watchdog/watchdog.log`
 
 ### Layer 2b — DISK (flint2 disk-watchdog) — добавлено 2026-06-21
@@ -94,6 +96,7 @@
 ### Layer 3 — EXTERNAL (exit1.dev + Cloudflare Worker)
 - **Сервис мониторинга:** [exit1.dev](https://app.exit1.dev/) (free, 10 мониторов, 5-мин интервал)
 - **Чек:** Web Keyword `https://immich.sys-lab.xyz:8443/api/server/ping` ищет `pong`. Регион Frankfurt.
+- **TODO (2026-09-23):** второй Web-чек `https://jellyfin.media.sys-lab.xyz:8443/health` → `Healthy` (Jellyfin теперь наружу, см. 6.7b).
 - **Webhook:** `r2:exit1.dev → Cloudflare Worker exit1-telegram-relay → Telegram bot`
   - Worker URL: `https://exit1-telegram-relay.alexandr-rachok.workers.dev`
   - Worker делает: парсит JSON от exit1.dev → форматирует HTML-карточку → POST на api.telegram.org
@@ -511,6 +514,8 @@ ssh ryzen4700 'sudo cp -a /tmp/srv-restore/* /srv/ && \
 # (UID 1000) не сможет писать в state.db и упадёт.
 
 # 3. Caddy config + systemd
+# 3b. fail2ban: apt install fail2ban; конфиги из архива: /etc/fail2ban/filter.d/caddy-8443-auth.conf,
+#     /etc/fail2ban/jail.d/caddy-8443.local; затем systemctl enable --now fail2ban (см. 6.7b)
 scp -r ryzen4700/etc/caddy ryzen4700:/tmp/
 ssh ryzen4700 'sudo cp /tmp/caddy/Caddyfile /etc/caddy/'
 
@@ -853,7 +858,9 @@ client
 | `radarr.media.sys-lab.xyz`         | 7878 |
 | `bazarr.media.sys-lab.xyz`         | 6767 |
 | `jellyseerr.media.sys-lab.xyz`     | 5055 |
-| `immich.sys-lab.xyz:8443`          | 2283 (publicly exposed via cloudflared, separate block in same Caddyfile) |
+| `immich.sys-lab.xyz:8443`          | 2283 (наружу через DNAT flint2 WAN:8443, отдельный блок в том же Caddyfile) |
+| `jellyfin.media.sys-lab.xyz:8443`  | 8096 (наружу через тот же DNAT; блок `*.media.sys-lab.xyz:8443`, см. 6.7b) |
+| `seerr.media.sys-lab.xyz:8443`     | 5055 (наружу через тот же DNAT; тот же блок, см. 6.7b) |
 
 **Config:**
 - Caddyfile: `/etc/caddy/Caddyfile` (один блок `*.media.sys-lab.xyz` с матчерами по host)
@@ -865,6 +872,51 @@ client
 **Восстановление после потери ryzen** (см. 5.2): Caddyfile входит в system-config-backup. CF_API_TOKEN тоже сохранится (через `/etc/systemd/system/caddy.service.d/env.conf`). После восстановления — `sudo systemctl reload caddy` и Caddy сам перевыпишет cert через DNS-01.
 
 ---
+
+### 6.7b Jellyfin и Seerr наружу через WAN:8443 и «один адрес везде» (2026-09-23)
+
+**Зачем.** Рабочий Mac с корпоративным DNS-прокси (Infoblox BloxOne Endpoint, `coredns` на 127.0.0.2:53) игнорирует DNS роутера, поэтому AdGuard-rewrite для него не работает. Костыль с `/etc/hosts` (имена → 192.168.100.5) работал только дома, а вне дома ломал и Immich. Решение: у Jellyfin и Immich один публичный адрес с портом 8443, который работает и дома (hairpin NAT), и снаружи (DNAT).
+
+**Что сделано:**
+- Caddy: блок `*.media.sys-lab.xyz:8443` с матчерами `jellyfin.media.sys-lab.xyz` → `localhost:8096` и `seerr.media.sys-lab.xyz` → `localhost:5055` (Seerr добавлен тем же днём); любой другой поддомен на 8443 отдаёт 404 (админки наружу не публикуются). Wildcard-сертификат переиспользован, новый не выпускался. Бэкапы: `/etc/caddy/Caddyfile.bak-2026-09-23` (до Jellyfin) и `.bak-2026-09-23b` (до Seerr).
+- Cloudflare DNS: A-записи `jellyfin.media.sys-lab.xyz` и `seerr.media.sys-lab.xyz` → 176.221.192.204, **DNS only** (серое облако). Оранжевое = трафик через CF: лимит 100 МБ на upload и вопросы к видеостримингу.
+- **Hairpin NAT (NAT loopback) на flint2 работает из коробки** через модуль `port_forward`: из LAN запрос на WAN-IP:8443 заворачивается на ryzen с SNAT. Проверено с ryzen и с WG-клиента. Отдельных правил в firewall не добавлялось. Тест с любого LAN-хоста: `curl --resolve immich.sys-lab.xyz:8443:176.221.192.204 https://immich.sys-lab.xyz:8443/api/server/ping` → 200.
+- flint2-watchdog: чек `jellyfin_lan_http` (Layer 2), бэкап `watchdog.sh.bak-2026-09-23`.
+- На рабочем Mac из `/etc/hosts` убраны jellyfin, immich, seerr и jellyseerr; строки для админок (sonarr/radarr/prowlarr/bazarr/qbit/homepage) оставлены.
+
+**Адреса клиентов после переделки:**
+- Immich: `https://immich.sys-lab.xyz:8443` везде, без изменений.
+- Jellyfin: `https://jellyfin.media.sys-lab.xyz:8443` везде (рабочий Mac; телефоны, где нужен доступ вне дома). Дома старые `https://jellyfin.media.sys-lab.xyz` (443) и `192.168.100.5:8096` продолжают работать (ТВ не трогали).
+- Seerr: `https://seerr.media.sys-lab.xyz:8443` везде. Алиас `jellyseerr.media.sys-lab.xyz` остаётся только для LAN (443, через AdGuard), снаружи его нет. Внутри Seerr лежат API-ключи Sonarr/Radarr, поэтому у админа сильный пароль обязателен.
+- Домашние устройства с DNS роутера идут в LAN напрямую (AdGuard-rewrite); hairpin используют только клиенты с внешним DNS.
+
+**Скрытые эффекты:**
+- Jellyfin и Seerr публичны, 2FA у них нет. Защита ниже.
+
+**Защита публичного :8443 (сделано 2026-09-23):**
+- Jellyfin: один пользователь (админ) с сильным паролем, лимит неудачных попыток 4 (Панель → Пользователи → Профиль), Quick Connect выключен.
+- Seerr 3.4.1: локальный вход выключен, вход новых пользователей Jellyfin выключен, права по умолчанию только «Запросы», URL приложения `https://seerr.media.sys-lab.xyz:8443`.
+- Jellyfin видит реальные IP: `network.xml` → `KnownProxies` = `172.21.0.1` (gateway docker-сети `media`, откуда приходит Caddy), `LocalNetworkSubnets` = `192.168.100.0/24`, `10.1.0.0/24` (дом и WG считаются LAN). Проверка: `docker logs jellyfin | grep denied` показывает адрес клиента, а не 172.21.x.
+- Caddy access-лог блока :8443: `/var/log/caddy/access-8443.log` (JSON, ротация 20 МБ × 5, 30 дней). Блоки :443 без лога, как и раньше.
+- **fail2ban** (пакет Ubuntu 1.0.2, `banaction = nftables`): jail `caddy-8443-auth` — фильтр `/etc/fail2ban/filter.d/caddy-8443-auth.conf` (401 на `/Users/AuthenticateByName`, 401/403 на `/api/v1/auth/jellyfin`, 401/403/500 на `/api/v1/auth/local`, `/QuickConnect/*`), jail `/etc/fail2ban/jail.d/caddy-8443.local`: 5 промахов за 10 мин → бан 1 ч, удвоение до недели. `ignoreip`: 127.0.0.1/8, 192.168.100.0/24 (в т.ч. роутер = источник hairpin), 10.1.0.0/24. Бан = nft reject на tcp/8443, сам порт для остальных открыт. Jail `sshd` включён пакетом по умолчанию (backend systemd), не трогали.
+  - Статус: `ssh ryzen4700 'sudo fail2ban-client status caddy-8443-auth'` (sudo с паролем; без пароля — через docker/nsenter root-трюк из 6.6). Снять бан: `fail2ban-client set caddy-8443-auth unbanip <IP>`. Проверка фильтра: `fail2ban-regex /var/log/caddy/access-8443.log /etc/fail2ban/filter.d/caddy-8443-auth.conf`.
+  - Симуляция проверена: `banip 203.0.113.5` → правило в `nft list table inet f2b-table` → `unbanip`.
+- **Разблокировка Jellyfin после lockout:** `ssh ryzen4700 jellyfin-unlock SykkyB` (скрипт `/usr/local/sbin/jellyfin-unlock`, запускать как sykkyb: останавливает контейнер на ~10 с, делает копию `jellyfin.db.bak-unlock-*`, обнуляет `InvalidLoginAttemptCount` и снимает право `IsDisabled` (Permissions.Kind=2), стартует контейнер). Нужен, потому что единственный пользователь = админ, и через UI разблокировать некому. Внимание: неудачные логины через Seerr тоже считаются в Jellyfin.
+- Все новые файлы в `RYZEN_PATHS` system-config-backup (Pipeline 1). Бэкапы «до»: `Caddyfile.bak-2026-09-23{,b,c}`, `network.xml.bak-2026-09-23`.
+- **Живые тесты 2026-09-24:** (а) fail2ban снаружи (Mac без VPN, Silknet GE): 5 неверных логинов → 401, шестой запрос — connection refused, порт 8443 закрыт для адреса целиком (Jellyfin/Immich/Seerr); бан снят вручную `unbanip`. (б) Алерты exit1.dev: временный `handle` в Caddy отдавал 503 только для 187.77.85.132 на jellyfin/seerr → через ~10 мин пришли DOWN в Telegram, после снятия заглушки — UP. Схема теста без даунтайма для пользователей; повторять так же.
+- **Обновления образов (пункт 8, решено 2026-09-23): только уведомления, обновление руками.** Diun (`crazymax/diun`, контейнер `diun`, стек `/srv/diun/`: `docker-compose.yml`, `diun.yml`, `images.yml`, `.env` с TG-кредами того же бота, что watchdog) раз в сутки в 09:00 (Asia/Tbilisi) сверяет digest тегов `jellyfin/jellyfin:latest`, `ghcr.io/seerr-team/seerr:latest`, `ghcr.io/immich-app/immich-server:v3` (file-provider, без docker.sock) и шлёт в Telegram «🔔 Новая версия образа …». Первый прогон без уведомлений. Обновить: `cd /opt/media-srv && docker compose pull jellyfin seerr && docker compose up -d jellyfin seerr`; Immich — по release notes в `/srv/immich` (сервер + ML согласованно). Watchtower сознательно не ставили: Immich нельзя обновлять вслепую. Тест доставки: `docker exec diun diun notif test`. Состояние: `docker exec diun diun image list`. На 2026-09-23: Jellyfin 12.1.0 и Seerr 3.4.1 актуальны, Immich 3.2.1 при последней 3.2.2.
+- **Гео-фильтр tcp/8443 (пункт 9, сделано 2026-09-23).** На ryzen nftables-таблица `inet geo8443` (hook input, priority -5): на порт 8443 пускаются только LAN/WG (`192.168.100.0/24`, `10.1.0.0/24`, `127/8`, `172.16/12`), страны из `/etc/geo8443/countries` (**ge by ru tr am pl bg** — Грузия, Беларусь, Россия, Турция, Армения, Польша, Болгария; коды ipdeny, по одному в строке) и CIDR из `/etc/geo8443/allow-extra.txt` (сейчас `187.77.85.132/32` — узел exit1.dev, Hostinger DE/Frankfurt; если чек начнёт флапать, расширить до `187.77.64.0/19`). Остальное: лог в kernel (`geo8443-drop`, лимит 6/мин) + drop. Режим в `/etc/geo8443/mode`: `drop` или `audit` (только лог `geo8443-deny`, ничего не блокирует — для проверки перед включением).
+  - Скрипт `/usr/local/sbin/geo8443-update [--cached]`: качает aggregated-списки с ipdeny.com в `/var/lib/geo8443/*.zone` (кэш; при неудаче загрузки оставляет старый список), собирает `geo8443.nft` и применяет одной транзакцией (`add table` + `flush table` + декларация, без «дыры»). ~14.6k элементов после auto-merge, применение < 1 с.
+  - systemd: `geo8443.service` (oneshot, при загрузке из кэша; `ExecStop` удаляет таблицу), `geo8443-refresh.timer` (понедельник 05:15 UTC ± 30 мин, обновляет списки). Проверка: `nft list chain inet geo8443 input` (counter на drop), `journalctl -k | grep geo8443`, `journalctl -t geo8443`. Кто-то свой заблокирован → `nft get element inet geo8443 allow_v4 { <IP> }`, добавить в `allow-extra.txt` и `geo8443-update --cached`.
+  - Проверено 2026-09-23: check-host из RU/PL/TR/BG соединяется, из DE/US/FR — нет; проба exit1.dev проходит; LAN, hairpin и WG — 200.
+  - **Скрытые эффекты:** в новой стране без WireGuard Jellyfin/Immich/Seerr не откроются (роуминг с грузинской SIM обычно выходит через GE); корпоративный GlobalProtect (шлюз vpn-eu.epam.com в EU) в подключённом состоянии будет заблокирован; внешний мониторинг работает только с адреса из allow-extra; check-host.net и подобные тесты «снаружи» теперь показывают timeout из большинства стран — это норма. Слои защиты порта 8443 на ryzen: geo8443 (priority -5) → fail2ban (`f2b-table`) → Caddy. Все файлы в `RYZEN_PATHS` system-config-backup.
+- exit1.dev (пункт 11, сделано 2026-09-24): чеки `jellyfin-8443` (`/health` → `Healthy`) и `seerr-8443` (`/api/v1/status` → `version`), Frankfurt, 5 мин, тот же webhook; пробы идут с 187.77.85.132 (в allow-extra гео-фильтра).
+- Не сделано (решение пользователя 2026-09-24: пока не надо): DDNS (12).
+- Hairpin-трафик приходит на ryzen с адресом роутера (SNAT): рабочий Mac дома виден в логах Caddy/Jellyfin как 192.168.100.1.
+- DDNS нигде нет: обе A-записи держатся на стабильности WAN-IP провайдера.
+- Корпоративный VPN (GlobalProtect) в подключённом состоянии сам решает, пропускать ли 8443.
+
+**Откат:** удалить A-запись; убрать блок `:8443` из Caddyfile (или вернуть `.bak-2026-09-23`) и `systemctl reload caddy`; вернуть строки в hosts; убрать чек из `watchdog.sh`.
 
 ### 6.8 Immich — DJI дрон-архив (external library) — добавлено 2026-08-04, обновлено 2026-09-07
 
