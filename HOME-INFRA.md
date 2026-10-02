@@ -178,6 +178,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - `/etc/samba/` (smbpasswd — пароли samba-юзеров; добавлено 2026-06-21)
 - `/root/`
 - `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`
+- `/etc/init.d/samba4` (локальный патч `vfs_override`, см. Pipeline 7; добавлено 2026-10-02)
 - `/etc/disk-watchdog.env` (TG-конфиг flash-watchdog)
 - `/mnt/sda1/watchdog/{watchdog.sh,config.env}`
 - crontab snapshot
@@ -186,7 +187,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - Compose-стеки: `/srv/{immich,cloudflared,vanilla-sky}/docker-compose.yml` + `.env` + `config.yml`
 - `/etc/caddy/Caddyfile`, `/etc/rsnapshot.conf`, `/etc/cron.d/`, `/etc/crontab`, `/etc/ssh/sshd_config`
 - `/home/sykkyb/.bashrc`, `.profile`, `.msmtprc`, `.ssh/`, `watchdog/`
-- `/usr/local/bin/{rsnapshot-safe,system-config-readroot}`
+- `/usr/local/bin/{rsnapshot-safe,cp-al-retry,system-config-readroot}`
 - crontab snapshot, `docker ps -a`, `docker volume ls`, `docker network ls`
 - SQLite базы (`RYZEN_SQLITE_DBS` в скрипте): `/srv/vanilla-sky/data/state.db` —
   снимается через `sqlite3 .backup` чтобы получить консистентный снапшот
@@ -318,8 +319,9 @@ scripts/backup.sh other     # цель custom SSH alias
 
 **Расположение:**
 - Конфиг: `/etc/rsnapshot.conf` на ryzen
-- Обёртка: `/usr/local/bin/rsnapshot-safe` — проверяет `mountpoint -q /backup` и шлёт письмо, если не примонтировано; иначе зовёт `rsnapshot "$@"`
-- Лог: `/var/log/rsnapshot.log` (ротация помесячно)
+- Обёртка: `/usr/local/bin/rsnapshot-safe` — проверяет, что `/backup` — настоящий CIFS-маунт (`findmnt -t cifs`), иначе абортится; затем зовёт `rsnapshot "$@"`, stderr rsnapshot и его детей пишет в `/var/log/rsnapshot-safe.err`
+- `cmd_cp` в конфиге — `/usr/local/bin/cp-al-retry` (с 2026-10-02): обычный `cp -al`, а при ошибке до трёх проходов `cp -al --update=none`, которые долинковывают только пропущенное
+- Лог: `/var/log/rsnapshot.log` (ротация помесячно, время в UTC)
 - Приёмник: `flint2:/mnt/sda1/immich-backup/`, на ryzen смонтирован как `/backup` (CIFS, `x-systemd.automount`, креды `/root/.smbcred`, юзер samba `immichbckp`)
 
 **Cron на ryzen (`/etc/cron.d/rsnapshot`, root):**
@@ -353,6 +355,22 @@ uci commit samba4
 /etc/init.d/samba4 restart
 ```
 Проверка, что применилось — в `/etc/samba/smb.conf` у секции `[immich-backup]` должны быть `force user = root` и `force group = root`. Побочный эффект: init генерит `valid users` только в ветке без force_root, так что строка `valid users = immichbckp` из секции пропадает — шара остаётся закрытой через `guest ok = no`, но доступна любому samba-юзеру роутера.
+
+**Инцидент 02.10.2026 — daily падает на `cp -al` (исправлено в тот же день).** С 14.09 по 02.10 daily 7 раз выходил с кодом 1 на этапе `cp -al daily.0 daily.1`: один файл из ~32 тыс. получал `Resource temporarily unavailable`, `cp` возвращал 1, rsnapshot прерывался до rsync. Ротация к этому моменту уже прошла, так что каждый сбой стирал самый старый daily и не добавлял новый. Часть сбоев 14–16.09 — отвалы USB-диска; 02.10 причина подтверждена по `logread` на flint2: `smbd` (Samba 4.18.8) упал с `PANIC: Bad talloc magic value` через 14 секунд после старта `cp -al`. Диагностика: `/var/log/rsnapshot-safe.err` на ryzen (UTC) и `logread | grep PANIC` на flint2 (+04).
+
+Попутно нашлось, что файлы с именем на `_` не попадали в бэкап вообще: rsync создаёт временный файл `._имя.XXXXXX`, а модуль `fruit` (в GL-шаблоне он глобальный: `vfs objects = catia fruit streams_xattr`) такие имена не даёт создать. Отсюда ежедневные `rsync: mkstemp "._….jpg" failed` и «completed, but with some warnings».
+
+Что сделано:
+1. **flint2 — шара `immich-backup` без VFS-модулей.** GL закомментировал в `/etc/init.d/samba4` вывод per-share `vfs objects`, поэтому в `smb_add_share()` добавлен локальный патч: uci-опция `vfs_override` (`none` → строка `vfs objects =`, иначе — список модулей). Оригинал скрипта: `/root/samba4.init.orig-4.11.0`, пропатченная копия: `home-lab/immich-backup-fix-20261002/samba4.init.patched`.
+   ```sh
+   uci set samba4.@sambashare[2].vfs_override='none'   # индекс сверить через uci get ...name
+   uci commit samba4
+   /etc/init.d/samba4 restart
+   ```
+   Проверка: в `/etc/samba/smb.conf` у секции `[immich-backup]` есть `vfs objects =`, и с ryzen от root проходит `touch /backup/._t && rm /backup/._t`. **Патч слетает при апгрейде прошивки** (init-скрипт перезаписывается): проверить `grep -c vfs_override /etc/init.d/samba4` и при нуле вставить блок заново.
+2. **ryzen — `cmd_cp /usr/local/bin/cp-al-retry`** в `/etc/rsnapshot.conf` (копия старого: `rsnapshot.conf.bak-20261002`): одиночный сбой при линковке больше не роняет весь прогон.
+
+Результат прогона 02.10 после фикса: `completed successfully` без предупреждений, 32259 файлов в источнике и в `daily.0`, три файла на `_` доехали. Что отключение `fruit` убирает именно панику `smbd` — гипотеза, подтвердится только отсутствием `PANIC` в следующие недели; обёртка страхует в любом случае. Скрипт, которым всё применялось: `home-lab/immich-backup-fix-20261002/apply.sh`.
 
 **Мониторинг:** чек `backup_immich` в Layer 1 (см. раздел 2) — алёрт, если последний успешный daily старше 30 часов.
 
@@ -494,6 +512,15 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 9. **immich port-forward (WAN 8443 → ryzen 192.168.100.5:8443)** — создаётся в UI (Security → Port Forwarding → +Add: TCP, ext 8443, IP 192.168.100.5, int 8443). Хранится в `/etc/config/port_forward` (НЕ в firewall!). В 4.9.0 проброс работает через **kernel-модуль `port_forward`** (`/proc/port_forward`, write-only) — **в iptables его НЕ видно, это норма**. ВАЖНО: модуль не всегда грузится на буте сам → нужен `/etc/modules.d/99-port_forward` (содержит `port_forward`), иначе UI-запись висит, но не пробрасывает. Проверка (с любого хоста): `curl -k --resolve immich.sys-lab.xyz:8443:<WAN_IP> https://immich.sys-lab.xyz:8443/api/server/ping` → 200. На него завязан external-монитор Layer 3 (exit1.dev). Порт 8443 при этом занят и админкой роутера (uhttpd) — модуль перехватывает раньше, конфликта нет.
 
 > ⚠️ USB-SSD (label `usbssd`) АППАРАТНО флакал в этот день (отваливался от шины 3+ раз) — при reseat монтируется в `/tmp/mountd/disk1_part1`, в `/mnt/sda1` возвращает disk-watchdog (Layer 2b) или вручную `mount /dev/sda1 /mnt/sda1`. Кандидат на замену.
+
+### 5.1d Апгрейд прошивки: keep-list расширен, есть скрипт восстановления (2026-09-28)
+
+- `/etc/sysupgrade.conf` на flint2 теперь содержит наши пути (бинари xray/панели, init-скрипты, `/etc/xray/`, `/etc/xray-panel/`, `/etc/rclone/`, `/etc/system-backup.pass`, `/etc/disk-watchdog.env`, `/etc/modules.d/99-port_forward`, скрипты в `/usr/sbin`, zoneinfo Tbilisi, launcher, `/root/.ssh/`, `/root/HOME-INFRA.md`). Проверка: `sysupgrade -l | grep -c xray` ≥ 5. Бэкап старого файла: `/etc/sysupgrade.conf.bak-2026-09-28`. Важно: стандартный keep-list 4.9.0 НЕ включал даже `/etc/xray/config.json` (в 5.1c выше это утверждение устарело).
+- Что keep-settings всё равно не сохраняет: rc.d-симлинки (enable), opkg-пакеты (`zoneinfo-asia transmission-daemon transmission-web htop nano`), патч `gl_home.html`.
+- **Перед апгрейдом:** `flint2-backups/UPGRADE-PLAN-<версия>.md` по образцу 4.11.0 + prefw-tarball (Mac + USB `/mnt/sda1/flint2-prefw/` + R2 `flint2-prefw/`).
+- **После апгрейда:** `flint2-backups/restore-after-upgrade.sh --dry-run`, затем без флага (доливает недостающее из tarball, sysupgrade.conf, opkg, cron, enable+restart сервисов, smoke-тест), затем `deploy/install.sh flint2`.
+- **После апгрейда — Samba для бэкапа Immich:** прошивка перезаписывает `/etc/init.d/samba4` и может перегенерить uci-конфиг. Проверить оба флага шары `immich-backup` (`force_root`, `vfs_override`) и патч init-скрипта — см. Pipeline 7.
+- **Проверено на 4.9.0→4.11.0 (2026-09-28):** keep-list сохранил всё, скрипт + install.sh восстановили за ~4 мин. Внешний тест 8443 делать только из стран geo8443 ryzen (иначе ложный таймаут). Итог: `flint2-backups/UPGRADE-PLAN-4.11.0.md` §9.
 
 ### 5.2 Восстановление ryzen4700
 
