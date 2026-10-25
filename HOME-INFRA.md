@@ -11,7 +11,7 @@
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
-| **beryl** | travel-роутер, sing-box VPN-клиент | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000) | `beryl` |
+| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclix0`, 192.168.100.x) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000), прошивка **4.8.1**; 4.11.0 подготовлена к установке (см. 5.3b) | `beryl` |
 
 Доменные имена (через DNS sys-lab.xyz):
 - `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
@@ -92,6 +92,14 @@
 - **Алерт:** 3 фейла подряд → 🔴 в `flint2-watchdog`-бот, 🟢 RECOVERED при возврате. Формат как у Layer 2.
 - **Почему отдельно от Layer 2:** основной watchdog живёт на самом USB-диске и умирает вместе с ним; этот — на флешке, поэтому может детектить и алертить пропажу диска.
 - **Лог:** `/tmp/disk-watchdog.log`, state `/tmp/disk-watchdog-state/`.
+
+### USB-SSD на flint2 — железо и драйвер (обновлено 2026-10-10)
+- **Диск:** WD Blue 1TB в боксе Realtek RTL9201 (0bda:9201), ext4 `usbssd` UUID `cc7fc234-…`. Маунты: `/mnt/sda1` (uci fstab, нужен скриптам) + `/tmp/mountd/disk1_part1` (GL `gl_nas_diskmanager`, на него смотрят samba-шары). Один ext4, два маунта — норма.
+- **Линк:** с 2026-10-10 **USB 3.0 / 5000M** (устройство `2-1` на SS-шине usb2). До этого всё лето сидел на 480M: SS-порт в xHCI не видел терминацию бокса — виноват был кабель A→C (два предыдущих кабеля давали SS только на ryzen). Чтение: ~170 МБ/с с начала диска, ~50 МБ/с на старых занятых областях (это сам SSD).
+- **Драйвер — только `usb-storage`, НЕ `uas`:** `/etc/init.d/rtl9201-no-uas` (START=09, до fstab/gl_nas на S40) ставит квирк `0bda:9201:u` в `/sys/module/usb_storage/parameters/quirks` и перебиндивает интерфейс с uas, если ядро уже успело. Причина: MediaTek xHCI + UAS → `Transfer event for unknown stream ring`, мост RTL9201 виснет под нагрузкой через UAS. usb-storage/uas вкомпилены в ядро GL, поэтому `/etc/modules.d` не работает. В keep-list `/etc/sysupgrade.conf` и в `restore-after-upgrade.sh` (только `enable`, без restart — перебинд под маунтом выдернет диск).
+- **Программный replug без рук:** `echo 0 > /sys/class/gpio/usb_power/value; sleep 1; echo 1 > …` — обесточивает порт (VBUS на GPIO). Перед этим: пауза cron `disk-watchdog`, `stop` minidlna/transmission/samba4, `umount` обоих маунтов. После: GL сам монтирует `/tmp/mountd/disk1_part1` и поднимает samba/minidlna; `/mnt/sda1` монтирует disk-watchdog в течение минуты (или руками `mount -o rw,noatime /dev/sda1 /mnt/sda1`), transmission стартовать руками.
+- **Диагностика SS:** `mount -t debugfs none /sys/kernel/debug` → `cat /sys/kernel/debug/usb/xhci/11200000.xhci/ports/port01/portsc` (port01 = SS-порт). `Link:RxDetect Not-connected` при воткнутом боксе = SS-пары не доходят (кабель/разъём); `Link:U0 PortSpeed:4` = 5 Гбит. GL-опция «USB 3.0 выкл» = `glconfig.general.usb3_disable` → пишет 1 в `usb2-port1/disable`; у нас пуста.
+- **История ресетов (сброс шины, диск переезжает sda→sdb):** 21.06, 25.08, 01.09, 03.09 (пропал совсем, до 05.09), 02.10 — все на старых кабелях при 480M. disk-watchdog лечит сам (`self-heal: remounted`). Следить, повторится ли на новом кабеле.
 
 ### Layer 3 — EXTERNAL (exit1.dev + Cloudflare Worker)
 - **Сервис мониторинга:** [exit1.dev](https://app.exit1.dev/) (free, 10 мониторов, 5-мин интервал)
@@ -180,6 +188,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`
 - `/etc/init.d/samba4` (локальный патч `vfs_override`, см. Pipeline 7; добавлено 2026-10-02)
 - `/etc/disk-watchdog.env` (TG-конфиг flash-watchdog)
+- `/etc/init.d/rtl9201-no-uas` (USB-SSD через usb-storage; добавлено 2026-10-10)
 - `/mnt/sda1/watchdog/{watchdog.sh,config.env}`
 - crontab snapshot
 
@@ -211,15 +220,16 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 ### Pipeline 2 — beryl weekly self-backup (`beryl-config-backup`)
 
 **Расположение:**
-- Скрипт: `/usr/sbin/beryl-config-backup` на beryl
-- Состояние: `/etc/beryl-backup/{state.sha256,beryl-backup.log}`
+- Скрипт: `/usr/sbin/beryl-config-backup` на beryl. **Source of truth с 2026-10-25 — в git:** `beryl-xray-web-console/router/usr/sbin/beryl-config-backup` (`install.sh` его НЕ деплоит; вручную: `cat router/usr/sbin/beryl-config-backup | ssh beryl 'cat > /tmp/b && mv /tmp/b /usr/sbin/beryl-config-backup && chmod 755 /usr/sbin/beryl-config-backup'`)
+- Состояние: `/etc/beryl-backup/{state.sha256,beryl-backup.log}`; генерируемые списки: `/etc/backup/*.txt` (см. ниже)
 - rclone: эфемерный в `/tmp/rclone`, удаляется trap'ом после каждого запуска (только когда нужен upload)
-- Постоянный disk-footprint: ~5 KB
+- Постоянный disk-footprint: ~5 KB + ~25 KB списков в `/etc/backup/`
 
 **Cron на beryl:**
 ```
 0 4 * * 0 /usr/sbin/beryl-config-backup
 ```
+⚠️ Beryl по воскресеньям обычно выключен: с 22.06 по 25.10.2026 cron ни разу не отработал. Перед апгрейдом прошивки и перед поездкой — всегда `--force` (6.2).
 
 **Что бэкапится (скоуп расширен 2026-06-22 после инцидента с MT6000 — чтобы чистая перешивка beryl была полностью восстановима, а не только наш деплой):**
 - **`/etc/config`** целиком (network, wireless, dhcp, firewall, **wireguard_server** с ключами, adguardhome, samba4, sing-box, switch-button, …)
@@ -229,6 +239,12 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - `/usr/bin/{sing-box,xray-panel-cli}`, `/etc/sing-box/`, `/etc/xray-panel-cli/` (вкл. `sources.json` для VPN Scout + `scans/`)
 - `/etc/init.d/{sing-box,xray-panel-cli}`, `/etc/hotplug.d/button/50-sing-box-switch`, `/etc/sysctl.d/99-disable-mptcp.conf`
 - `/www/xray-panel-launcher.js`, `/www/gl_home.html`, `/www/gl_home.html.bak`
+- **v3 (2026-10-25, аудит overlay vs /rom перед 4.11.0):** `/etc/sysupgrade.conf`, `/etc/opkg/customfeeds.conf` + `/etc/opkg/keys` (фид v2raya), `/etc/oui/oui.db`, TLS-сертификаты админки `/etc/uhttpd.{crt,key}` и `/etc/nginx/{nginx.conf,nginx.cer,nginx.key}`
+- **`/etc/backup/` — списки, которые скрипт генерирует перед хешем** (и поэтому их изменение тоже триггерит снапшот): `installed_packages.txt`, `packages-user-installed.txt` (чего нет в `/rom`: htop + 26 пакетов LuCI), `packages-removed-vs-rom.txt` (mptun-core), `services-enabled.txt`, `services-disabled-vs-rom.txt` (odhcpd rtty samba4 tor), `sysupgrade-keep-list.txt`
+- **Volatile (в tar, но не в хеше):** `/etc/oui-tertf/client.db` (имена клиентов в GL UI, меняется с трафиком), сам `beryl-backup.log`
+- **Манифест:** glversion, `uci export system` (TZ Asia/Tbilisi, ntp), glconfig, uci sing-box, счётчики WG-профилей/пиров/профилей панели/сканов, списки выше, текущий `sysupgrade.conf`
+- Сознательно НЕ бэкапим: `/etc/beryl-backup.pass` (бессмысленно внутри своего же шифра — он в keep-list и в 1Password), файлы LuCI (ставятся пакетами, см. список), GL-сгенерированное (`/etc/wireless/mediatek/*.dat`, `firewall-portal.user`, torrc, vsftpd.conf), AdGuard stats/sessions
+- `--gen-state` — только пересоздать `/etc/backup/*` и выйти (без сети; зовёт Pipeline 3)
 
 **Шифрование (с 2026-06-22):** скоуп теперь содержит секреты (WG-приватключи, ssh, shadow), поэтому снапшот **AES-256 шифруется** перед заливкой в R2 (fail-closed — при сбое шифрования upload отменяется). Пароль: `beryl:/etc/beryl-backup.pass` (= `flint2:/etc/system-backup.pass`, дубль в 1Password). Файлы в R2: `beryl-self-*.tar.gz.enc`. Хеш-детектор использует `find -exec sha256sum` (устойчив к кавычкам в именах).
 
@@ -236,7 +252,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 | Состояние beryl | Что произойдёт |
 |-----------------|----------------|
 | дома, без изменений | exit за <2 сек, нулевой трафик |
-| в дороге, есть интернет, есть изменения | wget rclone (25 MB) → tar (~16 MB) → upload → trap чистит /tmp |
+| в дороге, есть интернет, есть изменения | wget rclone (25 MB) → tar (~19 MB, из них ~22 MB сканов VPN Scout до сжатия) → upload → trap чистит /tmp |
 | в дороге, нет интернета | wget fail, лог "rclone download failed", state не обновляется → retry в следующее воскресенье |
 | выключен | cron не сработает, отработает в следующий запуск |
 
@@ -253,7 +269,7 @@ scripts/backup.sh           # цель beryl
 scripts/backup.sh other     # цель custom SSH alias
 ```
 
-Делает то же что Pipeline 2, но запускается с Mac → SCP файлов → tar.gz в `<repo>/backups/` (gitignored). Дополнительно мирорит в R2 (`r2:sys-lab-home-backups/beryl-snapshots/`).
+Делает то же что Pipeline 2, но запускается с Mac → SCP файлов → tar.gz в `<repo>/backups/` (gitignored, plaintext) + **`.sha256` рядом** (его проверяет `restore-after-upgrade.sh`). Перед сбором зовёт `beryl-config-backup --gen-state` на роутере, так что в манифесте те же списки пакетов/сервисов/keep-list. Дополнительно мирорит в R2 шифрованно (`r2:sys-lab-home-backups/beryl-snapshots/beryl-<ts>.tar.gz.enc`). Скоуп (`PATHS`/`VOLATILE_PATHS`) держать в синке с `router/usr/sbin/beryl-config-backup`.
 
 ### Pipeline 4 — media-srv appdata (restic, local-only)
 
@@ -398,8 +414,8 @@ sys-lab-home-backups/
 │   └── flint2-prefw-2026-06-21_0126.tar.gz.enc          (перед апгрейдом 4.9.0)
 │
 ├── beryl-snapshots/                                      ← Pipeline 2+3
-│   ├── beryl-self-20260504-194152Z.tar.gz               (~16 MB, beryl-self)
-│   └── beryl-20260504-193555Z.tar.gz                    (~16 MB, Mac-side)
+│   ├── beryl-self-20261025-183323Z.tar.gz.enc          (ШИФРОВАНО, ~19 MB, Pipeline 2 v3)
+│   └── beryl-20261025-183812Z.tar.gz.enc               (ШИФРОВАНО, ~19 MB, Mac-side; plaintext + .sha256 в <repo>/backups/)
 │
 ├── domovoy-snapshots/                                    ← Pipeline 6 (weekly)
 │   └── domovoy-backup-20260628-194825Z.tgz.enc          (ШИФРОВАНО, ~210 KB: .env+db+google+рецепты)
@@ -579,34 +595,45 @@ ssh ryzen4700 'cd /srv/vanilla-sky && docker compose up -d'
 
 ### 5.3 Восстановление beryl
 
-См. также `~/Documents/projects/beryl-xray-web-console/scripts/backup.sh` — там есть restore-инструкции в шапке.
+Полный чеклист: `beryl-xray-web-console/UPGRADE-PLAN-4.11.0.md`; скрипт: `beryl-xray-web-console/scripts/restore-after-upgrade.sh` (идемпотентен, `--dry-run`).
 
 ```bash
-# 1. С Mac берём свежайший beryl-snapshot
+cd ~/Documents/projects/home-lab/beryl-xray-web-console
+
+# 1. Снапшот: свежий plaintext в backups/beryl-*.tar.gz (+ .sha256) — или из R2 (.enc):
 rclone copy r2:sys-lab-home-backups/beryl-snapshots/ /tmp/beryl-restore/ --max-age 30d
-cd /tmp/beryl-restore
+# расшифровка: пароль "system-backup pass" из 1Password → файл
+openssl enc -d -aes-256-cbc -pbkdf2 -pass file:/tmp/pass -in /tmp/beryl-restore/beryl-self-<ts>.tar.gz.enc -out /tmp/beryl-restore/snap.tar.gz
 
-# Выбираем самый свежий (либо beryl-self-* либо beryl-*)
-LATEST=$(ls -t beryl*.tar.gz | head -1)
+# 2. ТОЛЬКО после чистой прошивки (U-Boot): cherry-pick UCI из tarball (не всё подряд — схемы прошивок
+#    могут отличаться): network, wireless, repeater, dhcp, firewall, wireguard, wireguard_server,
+#    sing-box, switch-button, system, adguardhome, dropbear + /etc/dropbear/authorized_keys,
+#    /etc/passwd|shadow|group, /etc/AdGuardHome/config.yaml, /etc/crontabs/root,
+#    /etc/opkg/customfeeds.conf + /etc/opkg/keys/. Затем reboot. LAN вернётся на 192.168.200.1.
 
-# 2. Заливаем на свежий beryl (после прошивки GL.iNet)
-scp -O "$LATEST" beryl:/tmp/
+# 3. Доливка кастома + сервисы + opkg + smoke (после Keep-Settings-апгрейда это ЕДИНСТВЕННЫЙ шаг):
+scripts/restore-after-upgrade.sh --dry-run
+scripts/restore-after-upgrade.sh                      # [--tarball FILE] [--pass FILE] [--host root@192.168.8.1] [--no-opkg] [--no-luci]
+#   доливает из tarball только отсутствующее (sing-box, xray-panel-cli, конфиги, rclone.conf, pass, скрипт бэкапа, launcher),
+#   права, keep-list в /etc/sysupgrade.conf, opkg htop + LuCI (+ zoneinfo-asia если нет), /tmp/localtime → Asia/Tbilisi,
+#   cron-строку бэкапа, enable+restart sing-box/xray-panel-cli, disable odhcpd/rtty/samba4/tor, smoke-тест.
 
-# 3. Распаковка прямо в корень — все пути абсолютные внутри tar
-ssh beryl "tar -xzf /tmp/$(basename $LATEST) -C /"
+# 4. Пере-патч GL UI кнопкой панели (прошивка привозит новый gl_home.html)
+deploy/install.sh beryl
 
-# 4. Включаем сервисы (init-скрипты восстановлены, но не enabled)
-ssh beryl '/etc/init.d/sing-box enable; /etc/init.d/sing-box start'
-ssh beryl '/etc/init.d/xray-panel-cli enable; /etc/init.d/xray-panel-cli start'
-
-# 5. Если нужен self-backup — установить скрипт + cron
-scp -O /usr/sbin/beryl-config-backup beryl:/usr/sbin/
-ssh beryl 'chmod 755 /usr/sbin/beryl-config-backup; \
-  crontab -l > /tmp/c; echo "0 4 * * 0 /usr/sbin/beryl-config-backup" >> /tmp/c; crontab /tmp/c'
-
-# 6. rclone.conf для beryl (R2 creds)
-# Скопировать вручную из ~/.r2-creds.env через ssh, см. секцию 6.
+# 5. Если /etc/beryl-backup.pass не приехал (чистая прошивка) — положить из 1Password, chmod 600,
+#    затем ssh beryl '/usr/sbin/beryl-config-backup --force'
 ```
+
+### 5.3b Апгрейд прошивки beryl: keep-list + restore-скрипт (подготовлено 2026-10-25, апгрейд 4.8.1→4.11.0 ещё не выполнен)
+
+- **Почему панель 4.8.1 «не видела» обновлений:** `upgrade.general.rc_upgrade=1` (дефолт) заставляет проверку тянуть `fw.gl-inet.com/firmware/mt3000/rc/list-sha256.txt`, которого больше нет (404 HTML) → `check_firmware_online` молча возвращает `{}`. Выключено через RPC `upgrade.set_config {"rc_upgrade":false}` (тумблер RC на странице Upgrade) → панель видит 4.11.0. На flint2 тот же флаг =1 и `mt6000/rc` тоже 404 — если панель flint2 перестанет видеть обновления, лечить так же.
+- **`/etc/sysupgrade.conf` на beryl дополнен** (`.bak-2026-10-25` рядом): `/etc/xray/`, `/etc/sing-box/`, `panel.yaml`/`profiles.json`/`sources.json` панели (`scans/` сознательно нет — 22 МБ в RAM при прошивке, есть в бэкапе), init-скрипты, hotplug кнопки, бинари sing-box/xray-panel-cli, launcher, `/etc/rclone/`, `/etc/beryl-backup.pass`, `/etc/beryl-backup/`, `/etc/backup/`, скрипт бэкапа, sysctl mptcp, `/etc/opkg/keys/`, `/root/`, zoneinfo Tbilisi. `sysupgrade -l` = 146 записей, 21 наш; проверка: `ssh beryl "sysupgrade -l | grep -cE 'sing-box|xray-panel-cli'"` → 10. Стандартный keep-list 4.8.1 НЕ сохранял ничего из этого.
+- **Что keep-settings всё равно не сохраняет:** rc.d-симлинки (enable sing-box/xray-panel-cli; disable odhcpd/rtty/samba4/tor), opkg-пакеты (htop + LuCI-стек, список в `/etc/backup/packages-user-installed.txt`), патч `gl_home.html` → `restore-after-upgrade.sh` + `deploy/install.sh beryl`.
+- **Локальные образы (Mac):** `home-lab/beryl-backups/fw/` — `mt3000-4.11.0_release3-*.tar` (sha256 сверен с официальным `list-sha256.txt`) и `mt3000-4.8.1-*.tar` (откат), плюс `.img` обеих версий для U-Boot web-recovery (192.168.1.1, hold RESET при включении; на форуме есть отчёт о зависании загрузки на 100 %).
+- **Перед апгрейдом:** оба pipeline с `--force` (6.2), `sysupgrade -l` видит наши пути, baseline (glversion, sing-box status, WG-профили, cron, панель :9092). Делать дома, Keep Settings ВКЛ, не ребутать повторно.
+- **Известные проблемы 4.11.0 на MT3000 (форум GL, окт. 2026):** WG-клиент виснет при Tailscale + IP Masquerading (фикс обещан в 4.11.1; у нас Tailscale не залогинен); у части пользователей после прошивки не поднимались Wi-Fi/админка — помогали 1–3 коротких (4 с) reset; lockout IoT-правилом при LAN 192.168.10.1 (починено в release3; у нас 192.168.200.1).
+- **Mesh (новое в 4.11):** главный роутер должен быть в Router mode (flint2 — ок, в узел его НЕ переводить, урок 2026-09-28); Beryl-узел теряет свою подсеть 192.168.200.x, админку и VPN-туннели = чистый AP. Решение «Beryl как узел для дальней зоны» конфликтует с ролью тревел-VPN-роутера — пока не трогать.
 
 ### 5.4 Восстановление Cloudflare Worker (exit1-telegram-relay)
 
@@ -761,9 +788,14 @@ ssh flint2 'tail -f /mnt/sda1/system-backup/system-backup.log'
 ssh flint2 '/usr/sbin/system-config-backup'           # обычный (skip if no changes)
 ssh flint2 '/usr/sbin/system-config-backup --force'   # форс-снапшот
 ssh beryl  '/usr/sbin/beryl-config-backup --force'
+ssh beryl  '/usr/sbin/beryl-config-backup --gen-state'  # только пересобрать /etc/backup/*.txt (пакеты, сервисы, keep-list)
 
-# Mac-side beryl backup
+# Mac-side beryl backup (пишет backups/beryl-<ts>.tar.gz + .sha256, зеркало в R2 шифрованно)
 cd ~/Documents/projects/home-lab/beryl-xray-web-console && scripts/backup.sh
+
+# Проверить R2-снапшот beryl расшифровкой (pass = beryl:/etc/beryl-backup.pass)
+rclone copy r2:sys-lab-home-backups/beryl-snapshots/beryl-self-<ts>.tar.gz.enc /tmp/ && ssh beryl 'cat /etc/beryl-backup.pass' > /tmp/pass \
+  && openssl enc -d -aes-256-cbc -pbkdf2 -pass file:/tmp/pass -in /tmp/beryl-self-<ts>.tar.gz.enc | tar tzf - | wc -l; rm -f /tmp/pass
 ```
 
 ### 6.3 Установка rclone на флинт (после reset/restore)
@@ -1041,8 +1073,8 @@ ssh ryzen4700 'docker run --rm --network immich_default \
 
 1. **Сам флинт упал, но healthchecks при этом не алёртит** — только если интернет провайдера лёг **одновременно с флинтом**. Маловероятно но возможно.
 2. **R2 token revocation** — если случайно удалю токен в CF dashboard, backup pipeline молча начнут падать на R2 upload (локальные снапшоты остаются). Алёрта на это нет. Workaround: проверять `r2:sys-lab-home-backups/system-snapshots/` раз в месяц на наличие свежего файла.
-3. **Beryl постоянно офлайн >180 дней** — снапшот в R2 будет ротейтнут (R2_RETENTION_DAYS=180). Локального снапшота на самом beryl нет (всё в эфемерном /tmp). Так что если beryl исчез на год и потом вернулся — настройки скриптами не восстановишь, надо иметь оффлайн-копию (например в этом репо). (beryl — травел-роутер, ведётся вручную.)
-4. **Прошивка GL.iNet (flint2 + beryl) не бэкапится** — если флэшка испортится и прошивка слетит, надо ставить с офсайта GL.iNet, потом восстанавливать конфиги.
+3. **Beryl постоянно офлайн >180 дней** — снапшот в R2 будет ротейтнут (R2_RETENTION_DAYS=180). Локального снапшота на самом beryl нет (всё в эфемерном /tmp). Оффлайн-копии: plaintext `beryl-xray-web-console/backups/beryl-*.tar.gz` на Mac (Pipeline 3, последняя 2026-10-25). Воскресный cron на beryl реально не срабатывает месяцами (роутер выключен) — следить за датой последнего `beryl-self-*` в R2.
+4. **Прошивка GL.iNet не бэкапится автоматически**, но образы лежат локально на Mac: `flint2-backups/*.bin` (4.9.0, 4.9.1, 4.11.0) и `beryl-backups/fw/` (4.8.1 и 4.11.0: `.tar` для панели + `.img` для U-Boot, sha256 рядом). Если флэшка испортится — ставить их через U-Boot, потом восстанавливать конфиги (5.1c / 5.3).
 5. **butler-home-ai после ребута ryzen** — `depends_on` соблюдается только при `docker compose up`, а не при авто-рестарте контейнеров по policy после ребута хоста. Теоретически возможны гонки старта (как было у searcharr). Редко; лечится ручным `docker compose up -d` или `/lockdown` на время.
 6. **Шифр-пароли бэкапов** (`/etc/system-backup.pass`, `~/butler-home-ai/.backup-pass`) — если потерять И хост, И зашифрованную заметку, R2-копии не расшифровать. Поэтому пароли обязательно дублируются в зашифрованных заметках.
 7. **DJI дрон-архив (~107 GB) не в облаке** — только 2 локальные копии: Mac SSD `NVME-SSD/DJI` + `ryzen4700:/mnt/media/DJI` (см. 6.8). Одновременная гибель обоих дисков = потеря архива. R2 не используется из-за объёма/цены. Флешки дрона чистятся после hash-верифицированного копирования — на них рассчитывать нельзя.
