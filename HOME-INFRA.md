@@ -11,7 +11,7 @@
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
-| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclix0`, 192.168.100.x) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000), прошивка **4.8.1**; 4.11.0 подготовлена к установке (см. 5.3b) | `beryl` |
+| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclix0`, 192.168.100.x) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000), прошивка **4.11.0** с 2026-10-25 (см. 5.3b) | `beryl` |
 
 Доменные имена (через DNS sys-lab.xyz):
 - `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
@@ -625,7 +625,7 @@ deploy/install.sh beryl
 #    затем ssh beryl '/usr/sbin/beryl-config-backup --force'
 ```
 
-### 5.3b Апгрейд прошивки beryl: keep-list + restore-скрипт (подготовлено 2026-10-25, апгрейд 4.8.1→4.11.0 ещё не выполнен)
+### 5.3b Апгрейд прошивки beryl: keep-list + restore-скрипт (4.8.1→4.11.0 выполнен 2026-10-25)
 
 - **Почему панель 4.8.1 «не видела» обновлений:** `upgrade.general.rc_upgrade=1` (дефолт) заставляет проверку тянуть `fw.gl-inet.com/firmware/mt3000/rc/list-sha256.txt`, которого больше нет (404 HTML) → `check_firmware_online` молча возвращает `{}`. Выключено через RPC `upgrade.set_config {"rc_upgrade":false}` (тумблер RC на странице Upgrade) → панель видит 4.11.0. На flint2 тот же флаг =1 и `mt6000/rc` тоже 404 — если панель flint2 перестанет видеть обновления, лечить так же.
 - **`/etc/sysupgrade.conf` на beryl дополнен** (`.bak-2026-10-25` рядом): `/etc/xray/`, `/etc/sing-box/`, `panel.yaml`/`profiles.json`/`sources.json` панели (`scans/` сознательно нет — 22 МБ в RAM при прошивке, есть в бэкапе), init-скрипты, hotplug кнопки, бинари sing-box/xray-panel-cli, launcher, `/etc/rclone/`, `/etc/beryl-backup.pass`, `/etc/beryl-backup/`, `/etc/backup/`, скрипт бэкапа, sysctl mptcp, `/etc/opkg/keys/`, `/root/`, zoneinfo Tbilisi. `sysupgrade -l` = 146 записей, 21 наш; проверка: `ssh beryl "sysupgrade -l | grep -cE 'sing-box|xray-panel-cli'"` → 10. Стандартный keep-list 4.8.1 НЕ сохранял ничего из этого.
@@ -634,6 +634,7 @@ deploy/install.sh beryl
 - **Перед апгрейдом:** оба pipeline с `--force` (6.2), `sysupgrade -l` видит наши пути, baseline (glversion, sing-box status, WG-профили, cron, панель :9092). Делать дома, Keep Settings ВКЛ, не ребутать повторно.
 - **Известные проблемы 4.11.0 на MT3000 (форум GL, окт. 2026):** WG-клиент виснет при Tailscale + IP Masquerading (фикс обещан в 4.11.1; у нас Tailscale не залогинен); у части пользователей после прошивки не поднимались Wi-Fi/админка — помогали 1–3 коротких (4 с) reset; lockout IoT-правилом при LAN 192.168.10.1 (починено в release3; у нас 192.168.200.1).
 - **Mesh (новое в 4.11):** главный роутер должен быть в Router mode (flint2 — ок, в узел его НЕ переводить, урок 2026-09-28); Beryl-узел теряет свою подсеть 192.168.200.x, админку и VPN-туннели = чистый AP. Решение «Beryl как узел для дальней зоны» конфликтует с ролью тревел-VPN-роутера — пока не трогать.
+- **Выполнено 2026-10-25 22:56–23:01** (Online + Keep Settings через RPC `upgrade.upgrade_online {keep_config,keep_package}`): ребут ~100 с, keep-list сохранил всё (кроме `scans/`, вернул из Mac-tarball), потерялись только rc.d sing-box/xray-panel-cli, htop, патч gl_home.html, и tor включился обратно; `scripts/restore-after-upgrade.sh` + `deploy/install.sh beryl` восстановили за ~2 мин. LuCI пережил апгрейд благодаря `keep_package=true` (GL «keep packages»). Новые IoT/mesh-backhaul/guest Wi-Fi выключены; `Block-LAN-mgmt-iot` целит в 192.168.10.1 (не наша LAN). Итог: `beryl-xray-web-console/UPGRADE-PLAN-4.11.0.md` §9.
 
 ### 5.4 Восстановление Cloudflare Worker (exit1-telegram-relay)
 
