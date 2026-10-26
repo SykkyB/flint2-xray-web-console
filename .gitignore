@@ -15,3 +15,6 @@
 panel.yaml
 panel.local.yaml
 disabled.json
+
+# Claude Code local permissions (per-machine, never commit)
+.claude/settings.local.json
