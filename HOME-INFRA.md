@@ -11,7 +11,8 @@
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
-| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclix0`, 192.168.100.x) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3000), прошивка **4.11.0** с 2026-10-25 (см. 5.3b) | `beryl` |
+| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclii0`, 192.168.100.x). **С 2026-10-26 это Beryl 7 (GL-MT3600BE)**, CN-юнит: VPN/AdGuard скрыты в меню GL по коду страны, наш стек работает (см. 5.3c) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3600BE), прошивка **4.9.0** | `beryl`, `beryl7` |
+| **beryl-ax** | бывший тревел-роутер Beryl AX (GL-MT3000), 4.11.0, выключен, полностью рабочий; кандидат в mesh-узел на кухню (5.3b) | — | OpenWrt 21.02 (GL-MT3000) | — |
 
 Доменные имена (через DNS sys-lab.xyz):
 - `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
@@ -635,6 +636,15 @@ deploy/install.sh beryl
 - **Известные проблемы 4.11.0 на MT3000 (форум GL, окт. 2026):** WG-клиент виснет при Tailscale + IP Masquerading (фикс обещан в 4.11.1; у нас Tailscale не залогинен); у части пользователей после прошивки не поднимались Wi-Fi/админка — помогали 1–3 коротких (4 с) reset; lockout IoT-правилом при LAN 192.168.10.1 (починено в release3; у нас 192.168.200.1).
 - **Mesh (новое в 4.11):** главный роутер должен быть в Router mode (flint2 — ок, в узел его НЕ переводить, урок 2026-09-28); Beryl-узел теряет свою подсеть 192.168.200.x, админку и VPN-туннели = чистый AP. Решение «Beryl как узел для дальней зоны» конфликтует с ролью тревел-VPN-роутера — пока не трогать.
 - **Выполнено 2026-10-25 22:56–23:01** (Online + Keep Settings через RPC `upgrade.upgrade_online {keep_config,keep_package}`): ребут ~100 с, keep-list сохранил всё (кроме `scans/`, вернул из Mac-tarball), потерялись только rc.d sing-box/xray-panel-cli, htop, патч gl_home.html, и tor включился обратно; `scripts/restore-after-upgrade.sh` + `deploy/install.sh beryl` восстановили за ~2 мин. LuCI пережил апгрейд благодаря `keep_package=true` (GL «keep packages»). Новые IoT/mesh-backhaul/guest Wi-Fi выключены; `Block-LAN-mgmt-iot` целит в 192.168.10.1 (не наша LAN). Итог: `beryl-xray-web-console/UPGRADE-PLAN-4.11.0.md` §9.
+
+### 5.3c Перенос на Beryl 7 (GL-MT3600BE), 2026-10-26
+
+Полный разбор и шаги: `beryl-xray-web-console/MIGRATION-BERYL7.md`. Кратко:
+- **CN-юнит** (`/proc/gl-hw-info/country_code=CN`): образы прошивок у CN и Global одинаковые; бэкенд VPN/AdGuard не блокирует, прячет только фронтенд — у пунктов меню в `/usr/share/oui/menu.d/*.json` стоит `lang_hide: ["zh-cn"]`, и `app.js` сверяет это с кодом страны, а не с языком. Прямые URL тоже закрыты. Наш sing-box/панель/кнопка от GL-овского VPN-UI не зависят. Конвертация CN→Global GL не поддерживается, в загрузчик не лезем. Опция показать меню (правка JSON в оверлее) описана в MIGRATION-BERYL7.md §1, не применена.
+- Железо: MT7987A, 4× A53, 512/512 МБ, 2× 2.5G, `aarch64_cortex-a53` — бинари с AX идут как есть. Прошивка 4.9.0 (4.11 для MT3600BE нет → **mesh не поддерживается**, AmneziaWG 2.0 есть).
+- Перенос: репитер к flint2 → апгрейд 4.8.7→4.9.0 (RPC, Keep Settings) → пакет конфигов из снапшота AX (VPN, AdGuard, кнопка, sing-box, xray, панель+сканы, rclone, pass, фид v2raya) → SSID/ключи → keep-list, cron → `deploy/install.sh` → LAN 192.168.200.1 → `restore-after-upgrade.sh` (zoneinfo-asia, htop, LuCI, localtime) → снапшоты R2 + Mac.
+- Грабли: tar с Mac переносит uid 501 (dropbear закрывает ключ) → `--uid 0 --gid 0` (в restore-скрипте); ручной IP на Ethernet Mac маскирует «нет DHCP»; 2.5G-линк после `network restart` надо переткнуть.
+- Старый Beryl AX выключен и полностью рабочий (откат = включить). Снапшоты обоих устройств лежат в одном префиксе R2 `beryl-snapshots/`, различать по `host:` в манифесте (GL-MT3000 vs GL-MT3600BE).
 
 ### 5.4 Восстановление Cloudflare Worker (exit1-telegram-relay)
 
