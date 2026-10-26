@@ -11,7 +11,7 @@
 |----------|------|--------|----|-----------| 
 | **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
-| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclii0`, 192.168.100.x). **С 2026-10-26 это Beryl 7 (GL-MT3600BE)**, CN-юнит: VPN/AdGuard скрыты в меню GL по коду страны, наш стек работает (см. 5.3c) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3600BE), прошивка **4.9.0** | `beryl`, `beryl7` |
+| **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclii0`, 192.168.100.x). **С 2026-10-26 это Beryl 7 (GL-MT3600BE)**, CN-юнит (VPN/AdGuard-меню возвращены скриптом, см. 5.3c) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3600BE), прошивка **4.9.0** | `beryl`, `beryl7` |
 | **beryl-ax** | бывший тревел-роутер Beryl AX (GL-MT3000), 4.11.0, выключен, полностью рабочий; кандидат в mesh-узел на кухню (5.3b) | — | OpenWrt 21.02 (GL-MT3000) | — |
 
 Доменные имена (через DNS sys-lab.xyz):
@@ -640,7 +640,7 @@ deploy/install.sh beryl
 ### 5.3c Перенос на Beryl 7 (GL-MT3600BE), 2026-10-26
 
 Полный разбор и шаги: `beryl-xray-web-console/MIGRATION-BERYL7.md`. Кратко:
-- **CN-юнит** (`/proc/gl-hw-info/country_code=CN`): образы прошивок у CN и Global одинаковые; бэкенд VPN/AdGuard не блокирует, прячет только фронтенд — у пунктов меню в `/usr/share/oui/menu.d/*.json` стоит `lang_hide: ["zh-cn"]`, и `app.js` сверяет это с кодом страны, а не с языком. Прямые URL тоже закрыты. Наш sing-box/панель/кнопка от GL-овского VPN-UI не зависят. Конвертация CN→Global GL не поддерживается, в загрузчик не лезем. Опция показать меню (правка JSON в оверлее) описана в MIGRATION-BERYL7.md §1, не применена.
+- **CN-юнит** (`/proc/gl-hw-info/country_code=CN`): образы прошивок у CN и Global одинаковые; бэкенд VPN/AdGuard не блокирует, прячет только фронтенд — у пунктов меню в `/usr/share/oui/menu.d/*.json` стоит `lang_hide: ["zh-cn"]`, и `app.js` сверяет это с кодом страны, а не с языком. Прямые URL тоже закрыты. Наш sing-box/панель/кнопка от GL-овского VPN-UI не зависят. Конвертация CN→Global GL не поддерживается, в загрузчик не лезем. VPN-меню возвращены 2026-10-26 скриптом `/usr/sbin/gl-unhide-cn-menus` (git `beryl-xray-web-console/router/usr/sbin/`, в keep-list; убирает `lang_hide` из JSON, nginx restart, `vpn-client enable`; идемпотентен, его зовут `deploy/install.sh` и `restore-after-upgrade.sh`, т.к. апгрейд привозит новые JSON).
 - Железо: MT7987A, 4× A53, 512/512 МБ, 2× 2.5G, `aarch64_cortex-a53` — бинари с AX идут как есть. Прошивка 4.9.0 (4.11 для MT3600BE нет → **mesh не поддерживается**, AmneziaWG 2.0 есть).
 - Перенос: репитер к flint2 → апгрейд 4.8.7→4.9.0 (RPC, Keep Settings) → пакет конфигов из снапшота AX (VPN, AdGuard, кнопка, sing-box, xray, панель+сканы, rclone, pass, фид v2raya) → SSID/ключи → keep-list, cron → `deploy/install.sh` → LAN 192.168.200.1 → `restore-after-upgrade.sh` (zoneinfo-asia, htop, LuCI, localtime) → снапшоты R2 + Mac.
 - Грабли: tar с Mac переносит uid 501 (dropbear закрывает ключ) → `--uid 0 --gid 0` (в restore-скрипте); ручной IP на Ethernet Mac маскирует «нет DHCP»; 2.5G-линк после `network restart` надо переткнуть.
