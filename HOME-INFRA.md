@@ -246,6 +246,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - **Манифест:** glversion, `uci export system` (TZ Asia/Tbilisi, ntp), glconfig, uci sing-box, счётчики WG-профилей/пиров/профилей панели/сканов, списки выше, текущий `sysupgrade.conf`
 - Сознательно НЕ бэкапим: `/etc/beryl-backup.pass` (бессмысленно внутри своего же шифра — он в keep-list и в 1Password), файлы LuCI (ставятся пакетами, см. список), GL-сгенерированное (`/etc/wireless/mediatek/*.dat`, `firewall-portal.user`, torrc, vsftpd.conf), AdGuard stats/sessions
 - `--gen-state` — только пересоздать `/etc/backup/*` и выйти (без сети; зовёт Pipeline 3)
+- **Два Beryl в одном префиксе (с 2026-10-27):** имя снапшота несёт модель — `beryl-self-<model>-<ts>.tar.gz.enc` (`mt3000` = Beryl AX, `mt3600be` = Beryl 7), в манифесте строки `host:` и `model:`. Файлы без модели в имени (до 26.10 16:08Z) — все от **Beryl AX** (последние: `beryl-self-20261026-073709Z`, Mac `beryl-20261026-073740Z`, оба 4.11.0); `beryl-*20261026-16*` — Beryl 7 на 4.9.0. AX выключен → его еженедельный бэкап не идёт, R2-ротация 180 дней сотрёт его копии к концу апреля 2027; локальная plaintext-копия на Mac остаётся.
 
 **Шифрование (с 2026-06-22):** скоуп теперь содержит секреты (WG-приватключи, ssh, shadow), поэтому снапшот **AES-256 шифруется** перед заливкой в R2 (fail-closed — при сбое шифрования upload отменяется). Пароль: `beryl:/etc/beryl-backup.pass` (= `flint2:/etc/system-backup.pass`, дубль в 1Password). Файлы в R2: `beryl-self-*.tar.gz.enc`. Хеш-детектор использует `find -exec sha256sum` (устойчив к кавычкам в именах).
 
@@ -270,7 +271,7 @@ scripts/backup.sh           # цель beryl
 scripts/backup.sh other     # цель custom SSH alias
 ```
 
-Делает то же что Pipeline 2, но запускается с Mac → SCP файлов → tar.gz в `<repo>/backups/` (gitignored, plaintext) + **`.sha256` рядом** (его проверяет `restore-after-upgrade.sh`). Перед сбором зовёт `beryl-config-backup --gen-state` на роутере, так что в манифесте те же списки пакетов/сервисов/keep-list. Дополнительно мирорит в R2 шифрованно (`r2:sys-lab-home-backups/beryl-snapshots/beryl-<ts>.tar.gz.enc`). Скоуп (`PATHS`/`VOLATILE_PATHS`) держать в синке с `router/usr/sbin/beryl-config-backup`.
+Делает то же что Pipeline 2, но запускается с Mac → SCP файлов → tar.gz в `<repo>/backups/` (gitignored, plaintext) + **`.sha256` рядом** (его проверяет `restore-after-upgrade.sh`). Перед сбором зовёт `beryl-config-backup --gen-state` на роутере, так что в манифесте те же списки пакетов/сервисов/keep-list. Дополнительно мирорит в R2 шифрованно (`r2:sys-lab-home-backups/beryl-snapshots/beryl-<ts>.tar.gz.enc`). Скоуп (`PATHS`/`VOLATILE_PATHS`) держать в синке с `router/usr/sbin/beryl-config-backup`. Имя: `backups/beryl-<model>-<ts>.tar.gz` (модель читается с роутера), манифест с `model:`.
 
 ### Pipeline 4 — media-srv appdata (restic, local-only)
 
@@ -614,7 +615,10 @@ openssl enc -d -aes-256-cbc -pbkdf2 -pass file:/tmp/pass -in /tmp/beryl-restore/
 
 # 3. Доливка кастома + сервисы + opkg + smoke (после Keep-Settings-апгрейда это ЕДИНСТВЕННЫЙ шаг):
 scripts/restore-after-upgrade.sh --dry-run
-scripts/restore-after-upgrade.sh                      # [--tarball FILE] [--pass FILE] [--host root@192.168.8.1] [--no-opkg] [--no-luci]
+scripts/restore-after-upgrade.sh                      # [--tarball FILE] [--pass FILE] [--host root@192.168.8.1] [--no-opkg] [--no-luci] [--force-model]
+#   сначала читает модель роутера (/proc/gl-hw-info/model) и берёт свежий backups/beryl-<model>-*.tar.gz; любой tarball
+#   сверяется по host:/model: в манифесте — снапшот другой модели = СТОП (--force-model, если осознанно; network/wireless
+#   он и так не трогает, но списки сервисов/пакетов будут чужие). Старые AX-файлы без модели в имени — только через --tarball.
 #   доливает из tarball только отсутствующее (sing-box, xray-panel-cli, конфиги, rclone.conf, pass, скрипт бэкапа, launcher),
 #   права, keep-list в /etc/sysupgrade.conf, opkg htop + LuCI (+ zoneinfo-asia если нет), /tmp/localtime → Asia/Tbilisi,
 #   cron-строку бэкапа, enable+restart sing-box/xray-panel-cli, disable odhcpd/rtty/samba4/tor, smoke-тест.
