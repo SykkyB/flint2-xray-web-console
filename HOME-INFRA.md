@@ -9,7 +9,7 @@
 
 | Hostname | Role | Subnet | OS | SSH alias |
 |----------|------|--------|----|-----------| 
-| **flint2** | основной роутер, gateway, XRAY-сервер | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
+| **flint2** | основной роутер, gateway, XRAY-сервер. Wi-Fi: `XXX.v24` (2.4 ГГц, HE40) / `XXX.v52` (5 ГГц, HE80), регион **US — временно, тест с 2026-11-10** (заводской DE, возврат `revert-de.sh`, см. 5.1f) | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
 | **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclii0`, 192.168.100.x). **С 2026-10-26 это Beryl 7 (GL-MT3600BE)**, бывший CN-юнит: 2026-10-27 код региона в Factory перешит на US, панель стоковая (см. 5.3c) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3600BE), прошивка **4.9.0** | `beryl`, `beryl7` |
 | **beryl-ax** | бывший тревел-роутер Beryl AX (GL-MT3000), 4.11.0, выключен, полностью рабочий; кандидат в mesh-узел на кухню (5.3b) | — | OpenWrt 21.02 (GL-MT3000) | — |
@@ -18,7 +18,7 @@
 - `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
 - `jellyfin.media.sys-lab.xyz:8443` → ryzen4700 (тот же DNAT, Caddy :8443 → jellyfin:8096), **добавлено 2026-09-23**, см. 6.7b
 - `seerr.media.sys-lab.xyz:8443` → ryzen4700 (тот же DNAT, Caddy :8443 → seerr:5055), **добавлено 2026-09-23**, см. 6.7b
-- `vpn.sys-lab.xyz:8443` → flint2, XRAY VLESS+Reality для VPN-клиентов
+- `vpn.sys-lab.xyz:9443` → flint2, XRAY VLESS+Reality (Vision, dest www.cloudflare.com) для VPN-клиентов. **Порт 9443, не 8443** (8443 — DNAT на Caddy ryzen, см. выше); Xray **26.11.9** с 2026-11-10, логи и ротация — §5.1e
 - `kitchen.sys-lab.xyz` → Mealie (рецепты domovoy) на ryzen, **через Cloudflare Tunnel** (cloudflared, published application route → `http://mealie:9000`, mealie в сети `proxy`) + **Cloudflare Access** (email-OTP, политика `household` = твой+женин email). TLS на edge Cloudflare, без проброса портов. API бота к Mealie идёт внутри docker (`http://mealie:9000`), мимо Access.
 - Публичный IP: `176.221.192.204` (домашний провайдер на flint2)
 
@@ -186,7 +186,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - `/etc/AdGuardHome/` (DNS rewrites, client-исключения — добавлено 2026-06-21 после потери при чистой перешивке)
 - `/etc/samba/` (smbpasswd — пароли samba-юзеров; добавлено 2026-06-21)
 - `/root/`
-- `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`
+- `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`, `/usr/sbin/xray-log-rotate` (ротация логов Xray; добавлено 2026-11-10, §5.1e)
 - `/etc/init.d/samba4` (локальный патч `vfs_override`, см. Pipeline 7; добавлено 2026-10-02)
 - `/etc/disk-watchdog.env` (TG-конфиг flash-watchdog)
 - `/etc/init.d/rtl9201-no-uas` (USB-SSD через usb-storage; добавлено 2026-10-10)
@@ -538,7 +538,55 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 - **Перед апгрейдом:** `flint2-backups/UPGRADE-PLAN-<версия>.md` по образцу 4.11.0 + prefw-tarball (Mac + USB `/mnt/sda1/flint2-prefw/` + R2 `flint2-prefw/`).
 - **После апгрейда:** `flint2-backups/restore-after-upgrade.sh --dry-run`, затем без флага (доливает недостающее из tarball, sysupgrade.conf, opkg, cron, enable+restart сервисов, smoke-тест), затем `deploy/install.sh flint2`.
 - **После апгрейда — Samba для бэкапа Immich:** прошивка перезаписывает `/etc/init.d/samba4` и может перегенерить uci-конфиг. Проверить оба флага шары `immich-backup` (`force_root`, `vfs_override`) и патч init-скрипта — см. Pipeline 7.
+- **Wi-Fi .dat-профили (`/etc/wireless/mediatek/*.dat`) НЕ в keep-list** (`sysupgrade -l` хранит только `/etc/config/wireless`) — и добавлять их не надо, прошивка может привезти новую схему. После апгрейда регион восстанавливается из uci `wireless.*.country` скриптом `gl-txpower-init`. Если на момент апгрейда стоит тестовый US, а нужен DE — сначала `revert-de.sh` (5.1f).
 - **Проверено на 4.9.0→4.11.0 (2026-09-28):** keep-list сохранил всё, скрипт + install.sh восстановили за ~4 мин. Внешний тест 8443 делать только из стран geo8443 ryzen (иначе ложный таймаут). Итог: `flint2-backups/UPGRADE-PLAN-4.11.0.md` §9.
+
+### 5.1e Xray на flint2: версия, логи на eMMC, ротация (2026-11-10)
+
+**Версия:** Xray-core **26.11.9** (было 26.3.27 с марта). Бинарь ставится руками, не opkg: `Xray-linux-arm64-v8a.zip` с GitHub Releases, sha256 сверить с `.dgst`, залить в staging на eMMC (`/opt/xray-new/`, **не в /tmp** — это RAM), прогнать `xray run -test -confdir <dir> -config <dir>/config.json -format json` тем же сочетанием флагов, что в `/etc/init.d/xray`, затем `mv -f` поверх `/usr/bin/xray` (rename, работающий процесс не трогает) и `/etc/init.d/xray restart`. Клиенты переподключаются сами, конфиги не меняются. Перед свапом — снапшот каталогом в `/mnt/sda1/xray-backup/snapshots/<дата>-pre-<версия>/` (config.json, бинари, init, panel.yaml, crontab). `geoip.dat`/`geosite.dat` из того же zip лежат в `/usr/share/xray` (`XRAY_LOCATION_ASSET`), правил на них пока нет.
+
+**Логи — больше НЕ в /tmp.** До 2026-11-10 `access`/`error` писались в `/tmp/xray-*.log` (tmpfs = RAM): 444 МБ за 43 дня при ~23 МБ/сут, `/tmp` 90 %, available ~50 МБ без swap — почти наверняка причина зависания 2026-08-25. Теперь:
+- `/opt/xray/log/access.log`, `/opt/xray/log/error.log` на eMMC (overlay f2fs, ~6.7 ГБ свободно). Сознательно **не на USB**: Xray не стартует, если не может открыть лог-файл, а USB-диск пересбрасывался/переименовывался (sda→sdb).
+- Ротация copy-truncate скриптом `/usr/sbin/xray-log-rotate` (Xray открывает лог с `O_APPEND`, обнуление файла безопасно, рестарт не нужен; панель детектит усадку файла и перечитывает). Cron: `15 4 */2 * *` — каждые 2 дня, плюс `5 * * * * … --if-larger 100` — страховка от всплеска. Хранится 7 gz-архивов на лог (`KEEP=7`), lock через `flock`, запись в `logread` с тегом `xray-log-rotate`.
+- `panel.yaml`: `log_access`/`log_error` переведены на новые пути.
+- Скрипт в `FLINT_PATHS` system-config-backup, в `/etc/sysupgrade.conf` и в `flint2-backups/restore-after-upgrade.sh` (RESTORE_IF_MISSING, KEEP_PATHS, chmod).
+- Старый RAM-лог целиком перенесён в `/mnt/sda1/xray-backup/logs/xray-access-ram-2026-09-28_to_2026-11-10.log` (446 МБ), после переноса free ~487 МБ.
+
+**Аудит по методичке Хабра 1103460 (2026-11-10), что осталось:** чужой SNI `www.cloudflare.com` на residential-IP Silknet (сервер отдаёт валидные сертификаты для любого Cloudflare-домена — заметный след REALITY), raw TCP вместо XHTTP, нет sniffing, нет блокировки private-сетей (любой VPN-клиент достаёт 192.168.100.1 и панель :9092 через туннель), `shortIds: deadbeef` из документации. План self-steal: Caddy на ryzen уже умеет LE DNS-01 через CF-токен → сайт `vpn.sys-lab.xyz` с пустой страницей, xray `dest: 192.168.100.5:8443`, `serverNames: [vpn.sys-lab.xyz]`; порт 443 на flint2 занят nginx GL.iNet (0.0.0.0:443) — либо redirect WAN:443→192.168.100.1:9443, либо остаёмся на 9443. Любой из этих шагов меняет клиентские конфиги, поэтому отложено.
+
+### 5.1f Wi-Fi на flint2: регион, тест JP → US, возврат DE (2026-11-10)
+
+**Текущее состояние (с 2026-11-10 18:38):** регион **US** на обоих радио — **временно**, тест по решению владельца; заводской регион юнита **DE** (`/proc/gl-hw-info/country_code`), и до теста стояло стоковое DE (`SKUenable=1 SkuTableIdx=1` — это не «косяк» прошлой сессии, так GL настраивает DE-юнит). 16:25–18:38 был JP. Радио: 2.4 ГГц `XXX.v24` (HE40, channel auto → сейчас ch 10), 5 ГГц `XXX.v52` (HE80, auto → ch 44), txpower 100 %, `random_bssid=1` (BSSID и uci `macaddr` новые после каждого ребута). Guest/IoT SSID выключены. Пользователь сам скажет, когда вернуть DE.
+
+**Как регион устроен в прошивке GL (MTK-драйвер `mt_wifi`; `iw` нет, только `iwinfo`/`iwpriv`):**
+- Профили драйвера `/etc/wireless/mediatek/mt7986-ax6000.dbdc.b0.dat` (2.4) и `b1.dat` (5): `CountryCode`, `CountryRegion`/`CountryRegionABand`, `SKUenable`, `SkuTableIdx`, `RDRegion`. Читаются **только при загрузке драйвера** → менять их = `reboot`. `wifi reload` профиль не перечитывает.
+- `/etc/init.d/gl-txpower-init` (START=09, только на буте) по uci `wireless.<radio>.country` правит .dat: JP → `CountryCode=JP SKUenable=1 SkuTableIdx=0`; DE на MT6000 → `SKUenable=1 SkuTableIdx=1`; остальные → `CountryCode=<cc> SKUenable=0`. Срабатывает только если `SKUenable` ещё не в нужном состоянии (поэтому DE→JP руками не менял ничего).
+- `/usr/sbin/mtk-wifi-configurator` (ubus `mtk-wifi`) в рантайме шлёт `iwpriv set CountryCode/CountryRegion/CountryRegionABand` из uci; в .dat пишет только `BssidNum` и `RDRegion` (FCC/JAP) при старте сервиса. SKU-поля не трогает.
+- **Что реально загрузил драйвер** — `/etc/wireless/mediatek/DBDC_card0.dat` (merged-профиль, mode 000, mtime = момент загрузки). Сейчас: `CountryCode=US SkuTableIdx=0 SKUenable=0;0 RDRegion=FCC CountryRegionABand=9`.
+- **Country IE из эфира** — с ryzen (Wi-Fi `wlp3s0`, `iw` там нет, sudo нет): `docker run --rm --net=host --privileged alpine:3.20 sh -c "apk add -q iw iproute2; ip link set wlp3s0 up; sleep 2; timeout 45 iw dev wlp3s0 scan | grep -E '^BSS|SSID:|Country:|freq:'"` — с `timeout` на каждом шаге (первый запуск без них повис). Подтверждено: `Country: US` у обоих SSID, соседи вещают GE. Mac (`system_profiler`, CoreWLAN) страну роутера не показывает.
+- `/etc/wireless/mediatek/*.dat` **не в keep-list** (`sysupgrade -l` — только `/etc/config/wireless`) → после апгрейда прошивки .dat стоковые, регион восстановит `gl-txpower-init` по uci `country`. Нужен DE после апгрейда — сначала вернуть DE (ниже).
+
+**Что показал тест (списки каналов — `iwpriv rax0 show channelinfo` → dmesg, `iwinfo … freqlist`):**
+
+| | DE (заводской) | JP | US |
+|---|---|---|---|
+| 2.4 ГГц каналы | 1–13 | 1–13 | 1–11 |
+| 5 ГГц каналы | 36–140 (19) | 36–140 (19) | 36–165 (25: +144, +149–165 без DFS) |
+| `SKUenable` / `SkuTableIdx` | 1 / 1 | 1 / 0 | 0 / 0 |
+| `RDRegion` | пусто | JAP | FCC |
+| Драйвер при старте, 2.4 ГГц `mtf_txpower_all_rate_info pwr` | 20 | 20 | 54 |
+
+Единицы `pwr`, видимо, 0.5 dBm — SKU-таблица при DE/JP реально режет целевую мощность; `iwinfo` при любом регионе показывает Tx-Power 20 dBm, реальная мощность по квартире не мерялась. DE и JP по списку каналов неразличимы — разница видна только в `DBDC_card0.dat` и в Country IE.
+
+**Файлы (только на USB `flint2:/mnt/sda1/wifi-region-test/`, в system-config-backup и R2 не входят):**
+- `20261110-161026-DE-before/` — снапшот DE: `wireless` (uci), `mt7986-ax6000.dbdc.b0.dat`, `b1.dat`, `DBDC_card0.dat`, `uci-wireless.txt`, `ra0-freqlist.txt`, `rax0-freqlist.txt`. `20261110-183759-JP-before-US/` — снапшот JP.
+- `apply-us.sh` — шаблон смены региона: снапшот текущего → `uci set wireless.mt798611.country` / `mt798612.country` → `sed` `CountryCode/SKUenable/SkuTableIdx/RDRegion` в оба .dat → `sync; reboot`; лог `apply-US-<ts>.log`. Под другую страну — копировать и править значения (страны без SKU: `SKUenable=0`; JP: `SKUenable=1 SkuTableIdx=0 RDRegion=JAP`).
+- `revert-de.sh` — **возврат на DE**: uci `country=DE` на обоих радио + копия .dat из DE-снапшота (`RDRegion` очищается) + `reboot`, лог `revert-DE-<ts>.log`. Запуск: `ssh flint2 'sh /mnt/sda1/wifi-region-test/revert-de.sh'` — роутер уходит в ребут, ~1 мин без сети. Проверка после: `grep -E "^(CountryCode|SKUenable|SkuTableIdx|RDRegion)=" /etc/wireless/mediatek/DBDC_card0.dat` → `DE / 1;1 / 1 / пусто`. Запасной путь без снапшота (по логике gl-txpower-init, не проверялся): `uci set wireless.mt798611.country=DE; uci set wireless.mt798612.country=DE; uci commit wireless; reboot`.
+- `apply-jp.sh` (wifi reload — не применяет) и `apply-jp-v2.sh` (wifi down/up — повесил роутер) — исторические, **не запускать**.
+
+**⚠️ `wifi down; wifi up` на flint2 вешает роутер.** 2026-11-10 16:25 после `wifi up` ядро повисло, аппаратный watchdog (mtk-wdt, 31 с) сбросил SoC, ~2 мин без сети, pstore/ramoops пустой (hard hang, не паника; похоже на зависание 2026-08-25). Применять профиль — только `reboot`. `wifi reload` безопасен, но регион не меняет. Ребут проверен дважды (16:25 и 18:38): xray + панель, sda1, DNAT 8443 (pf-guard переприменяет через ~60 с) поднимаются сами.
+
+**Смена региона по шагам:** (1) снапшот .dat + uci в `/mnt/sda1/wifi-region-test/<ts>-<from>-before-<to>/`; (2) uci `country` на обоих радио + commit; (3) `sed` в оба .dat; (4) `sync; reboot` из detached-скрипта с логом на USB (`( trap "" HUP; sh script ) >/dev/null 2>&1 </dev/null &` — на busybox нет `nohup`/`setsid`; Mac сидит на Wi-Fi flint2, SSH отвалится); (5) после бута — `DBDC_card0.dat`, `iwinfo rax0 freqlist`, при желании Country IE с ryzen; (6) инфра-чек: `/etc/init.d/xray status`, `netstat -tln | grep 9443`, `cat /proc/port_forward_rules`, `mount | grep sda1`.
 
 ### 5.2 Восстановление ryzen4700
 
@@ -1094,3 +1142,4 @@ ssh ryzen4700 'docker run --rm --network immich_default \
 5. **butler-home-ai после ребута ryzen** — `depends_on` соблюдается только при `docker compose up`, а не при авто-рестарте контейнеров по policy после ребута хоста. Теоретически возможны гонки старта (как было у searcharr). Редко; лечится ручным `docker compose up -d` или `/lockdown` на время.
 6. **Шифр-пароли бэкапов** (`/etc/system-backup.pass`, `~/butler-home-ai/.backup-pass`) — если потерять И хост, И зашифрованную заметку, R2-копии не расшифровать. Поэтому пароли обязательно дублируются в зашифрованных заметках.
 7. **DJI дрон-архив (~107 GB) не в облаке** — только 2 локальные копии: Mac SSD `NVME-SSD/DJI` + `ryzen4700:/mnt/media/DJI` (см. 6.8). Одновременная гибель обоих дисков = потеря архива. R2 не используется из-за объёма/цены. Флешки дрона чистятся после hash-верифицированного копирования — на них рассчитывать нельзя.
+8. **Wi-Fi-регион flint2 временно US (тест с 2026-11-10)** — DE-снапшот и скрипт возврата `revert-de.sh` лежат только на USB `flint2:/mnt/sda1/wifi-region-test/` (не в system-config-backup и не в R2). Если USB умрёт до возврата — запасной путь через uci `country=DE` + reboot, см. 5.1f.
