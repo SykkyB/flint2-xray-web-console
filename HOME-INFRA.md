@@ -12,7 +12,7 @@
 | **flint2** | основной роутер, gateway, XRAY-сервер. Wi-Fi: `XXX.v24` (2.4 ГГц, HE40) / `XXX.v52` (5 ГГц, HE80), регион **US — временно, тест с 2026-11-10** (заводской DE, возврат `revert-de.sh`, см. 5.1f) | 192.168.100.1 | OpenWrt 21.02 (GL-MT6000) | `flint2` |
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
 | **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclii0`, 192.168.100.x). **С 2026-10-26 это Beryl 7 (GL-MT3600BE)**, бывший CN-юнит: 2026-10-27 код региона в Factory перешит на US, панель стоковая (см. 5.3c) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3600BE), прошивка **4.9.0** | `beryl`, `beryl7` |
-| **beryl-ax** | бывший тревел-роутер Beryl AX (GL-MT3000), 4.11.0, выключен, полностью рабочий; кандидат в mesh-узел на кухню (5.3b) | — | OpenWrt 21.02 (GL-MT3000) | — |
+| **beryl-ax** | бывший тревел-роутер Beryl AX (GL-MT3000), 4.11.0 (**не обновлён до 4.11.1 и не проверен по CSA-2026-01**, см. §8), выключен, полностью рабочий; кандидат в mesh-узел на кухню (5.3b) | — | OpenWrt 21.02 (GL-MT3000) | — |
 
 Доменные имена (через DNS sys-lab.xyz):
 - `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
@@ -186,7 +186,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 - `/etc/AdGuardHome/` (DNS rewrites, client-исключения — добавлено 2026-06-21 после потери при чистой перешивке)
 - `/etc/samba/` (smbpasswd — пароли samba-юзеров; добавлено 2026-06-21)
 - `/root/`
-- `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`, `/usr/sbin/xray-log-rotate` (ротация логов Xray; добавлено 2026-11-10, §5.1e)
+- `/usr/sbin/xray-panel-backup`, `/usr/sbin/system-config-backup`, `/usr/sbin/disk-watchdog`, `/usr/sbin/xray-log-rotate` (ротация логов Xray; добавлено 2026-11-10, §5.1e), `/usr/sbin/wan-watchdog` (переподъём WAN; добавлено 2026-11-14, §5.1g)
 - `/etc/init.d/samba4` (локальный патч `vfs_override`, см. Pipeline 7; добавлено 2026-10-02)
 - `/etc/disk-watchdog.env` (TG-конфиг flash-watchdog)
 - `/etc/init.d/rtl9201-no-uas` (USB-SSD через usb-storage; добавлено 2026-10-10)
@@ -412,8 +412,11 @@ sys-lab-home-backups/
 ├── xray-snapshots/                                       ← xray-panel-backup (с 2026-06-21)
 │   └── 2026-06-21_1509.tar.gz.enc                        (ШИФРОВАНО, ~15 MB: xray+panel+reality)
 │
-├── flint2-prefw/                                         ← разовый pre-firmware снапшот
-│   └── flint2-prefw-2026-06-21_0126.tar.gz.enc          (перед апгрейдом 4.9.0)
+├── flint2-prefw/                                         ← pre-firmware снапшоты (deploy/make-prefw.sh, 5.1h)
+│   ├── flint2-prefw-2026-06-21_0126.tar.gz.enc          (перед апгрейдом 4.9.0)
+│   ├── flint2-prefw-2026-09-28_2128.tar.gz.enc          (перед 4.11.0)
+│   ├── flint2-prefw-2026-11-23_1338.tar.gz.enc          (перед 4.11.1, ~18.7 MB)
+│   └── flint2-prefw-2026-11-23_1517.tar.gz.enc          (после 4.11.1, ~15.8 MB)
 │
 ├── beryl-snapshots/                                      ← Pipeline 2+3
 │   ├── beryl-self-20261025-183323Z.tar.gz.enc          (ШИФРОВАНО, ~19 MB, Pipeline 2 v3)
@@ -535,8 +538,8 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 
 - `/etc/sysupgrade.conf` на flint2 теперь содержит наши пути (бинари xray/панели, init-скрипты, `/etc/xray/`, `/etc/xray-panel/`, `/etc/rclone/`, `/etc/system-backup.pass`, `/etc/disk-watchdog.env`, `/etc/modules.d/99-port_forward`, скрипты в `/usr/sbin`, zoneinfo Tbilisi, launcher, `/root/.ssh/`, `/root/HOME-INFRA.md`). Проверка: `sysupgrade -l | grep -c xray` ≥ 5. Бэкап старого файла: `/etc/sysupgrade.conf.bak-2026-09-28`. Важно: стандартный keep-list 4.9.0 НЕ включал даже `/etc/xray/config.json` (в 5.1c выше это утверждение устарело).
 - Что keep-settings всё равно не сохраняет: rc.d-симлинки (enable), opkg-пакеты (`zoneinfo-asia transmission-daemon transmission-web htop nano`), патч `gl_home.html`.
-- **Перед апгрейдом:** `flint2-backups/UPGRADE-PLAN-<версия>.md` по образцу 4.11.0 + prefw-tarball (Mac + USB `/mnt/sda1/flint2-prefw/` + R2 `flint2-prefw/`).
-- **После апгрейда:** `flint2-backups/restore-after-upgrade.sh --dry-run`, затем без флага (доливает недостающее из tarball, sysupgrade.conf, opkg, cron, enable+restart сервисов, smoke-тест), затем `deploy/install.sh flint2`.
+- **Перед апгрейдом:** `flint2-backups/UPGRADE-PLAN-<версия>.md` по образцу 4.11.0 + prefw-tarball (Mac + USB `/mnt/sda1/flint2-prefw/` + R2 `flint2-prefw/`) — с 2026-11-23 собирается одной командой `deploy/make-prefw.sh` (5.1h).
+- **После апгрейда:** `deploy/restore-after-upgrade.sh --dry-run` (с 2026-11-23 скрипт в git этого репо; `flint2-backups/restore-after-upgrade.sh` — обёртка на него), затем без флага (доливает недостающее из tarball, sysupgrade.conf, opkg, cron, enable+restart сервисов, smoke-тест), затем `deploy/install.sh flint2`.
 - **После апгрейда — Samba для бэкапа Immich:** прошивка перезаписывает `/etc/init.d/samba4` и может перегенерить uci-конфиг. Проверить оба флага шары `immich-backup` (`force_root`, `vfs_override`) и патч init-скрипта — см. Pipeline 7.
 - **Wi-Fi .dat-профили (`/etc/wireless/mediatek/*.dat`) НЕ в keep-list** (`sysupgrade -l` хранит только `/etc/config/wireless`) — и добавлять их не надо, прошивка может привезти новую схему. После апгрейда регион восстанавливается из uci `wireless.*.country` скриптом `gl-txpower-init`. Если на момент апгрейда стоит тестовый US, а нужен DE — сначала `revert-de.sh` (5.1f).
 - **Проверено на 4.9.0→4.11.0 (2026-09-28):** keep-list сохранил всё, скрипт + install.sh восстановили за ~4 мин. Внешний тест 8443 делать только из стран geo8443 ryzen (иначе ложный таймаут). Итог: `flint2-backups/UPGRADE-PLAN-4.11.0.md` §9.
@@ -549,10 +552,12 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 - `/opt/xray/log/access.log`, `/opt/xray/log/error.log` на eMMC (overlay f2fs, ~6.7 ГБ свободно). Сознательно **не на USB**: Xray не стартует, если не может открыть лог-файл, а USB-диск пересбрасывался/переименовывался (sda→sdb).
 - Ротация copy-truncate скриптом `/usr/sbin/xray-log-rotate` (Xray открывает лог с `O_APPEND`, обнуление файла безопасно, рестарт не нужен; панель детектит усадку файла и перечитывает). Cron: `15 4 */2 * *` — каждые 2 дня, плюс `5 * * * * … --if-larger 100` — страховка от всплеска. Хранится 7 gz-архивов на лог (`KEEP=7`), lock через `flock`, запись в `logread` с тегом `xray-log-rotate`.
 - `panel.yaml`: `log_access`/`log_error` переведены на новые пути.
-- Скрипт в `FLINT_PATHS` system-config-backup, в `/etc/sysupgrade.conf` и в `flint2-backups/restore-after-upgrade.sh` (RESTORE_IF_MISSING, KEEP_PATHS, chmod).
+- Скрипт в `FLINT_PATHS` system-config-backup, в `/etc/sysupgrade.conf` и в `deploy/restore-after-upgrade.sh` (RESTORE_IF_MISSING, KEEP_PATHS, chmod).
 - Старый RAM-лог целиком перенесён в `/mnt/sda1/xray-backup/logs/xray-access-ram-2026-09-28_to_2026-11-10.log` (446 МБ), после переноса free ~487 МБ.
 
-**Аудит по методичке Хабра 1103460 (2026-11-10), что осталось:** чужой SNI `www.cloudflare.com` на residential-IP Silknet (сервер отдаёт валидные сертификаты для любого Cloudflare-домена — заметный след REALITY), raw TCP вместо XHTTP, нет sniffing, нет блокировки private-сетей (любой VPN-клиент достаёт 192.168.100.1 и панель :9092 через туннель), `shortIds: deadbeef` из документации. План self-steal: Caddy на ryzen уже умеет LE DNS-01 через CF-токен → сайт `vpn.sys-lab.xyz` с пустой страницей, xray `dest: 192.168.100.5:8443`, `serverNames: [vpn.sys-lab.xyz]`; порт 443 на flint2 занят nginx GL.iNet (0.0.0.0:443) — либо redirect WAN:443→192.168.100.1:9443, либо остаёмся на 9443. Любой из этих шагов меняет клиентские конфиги, поэтому отложено.
+**shortId (2026-11-14):** в `realitySettings.shortIds` добавлен случайный `24db1ef8314c8ac2` первым элементом, `deadbeef` оставлен вторым на переходный период (старые ссылки работают, панель берёт `shortIds[0]` для новых ссылок). Проверено локальным xray-клиентом с Mac: новый и старый sid проходят, чужой — нет. Убрать `deadbeef`, когда все клиенты переимпортируют ссылки. Снапшот: `/mnt/sda1/xray-backup/snapshots/2026-11-14_2156-pre-shortid/`.
+
+**Аудит по методичке Хабра 1103460 (2026-11-10), что осталось:** чужой SNI `www.cloudflare.com` на residential-IP Silknet (сервер отдаёт валидные сертификаты для любого Cloudflare-домена — заметный след REALITY), raw TCP вместо XHTTP, нет sniffing, блокировка private-сетей теперь есть по умолчанию в freedom 26.11.9 (finalRules блокируют private для VLESS-inbound), shortId сменён 2026-11-14. План self-steal: Caddy на ryzen уже умеет LE DNS-01 через CF-токен → сайт `vpn.sys-lab.xyz` с пустой страницей, xray `dest: 192.168.100.5:8443`, `serverNames: [vpn.sys-lab.xyz]`; порт 443 на flint2 занят nginx GL.iNet (0.0.0.0:443) — либо redirect WAN:443→192.168.100.1:9443, либо остаёмся на 9443. Любой из этих шагов меняет клиентские конфиги, поэтому отложено.
 
 ### 5.1f Wi-Fi на flint2: регион, тест JP → US, возврат DE (2026-11-10)
 
@@ -587,6 +592,50 @@ ssh flint2 'ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new syk
 **⚠️ `wifi down; wifi up` на flint2 вешает роутер.** 2026-11-10 16:25 после `wifi up` ядро повисло, аппаратный watchdog (mtk-wdt, 31 с) сбросил SoC, ~2 мин без сети, pstore/ramoops пустой (hard hang, не паника; похоже на зависание 2026-08-25). Применять профиль — только `reboot`. `wifi reload` безопасен, но регион не меняет. Ребут проверен дважды (16:25 и 18:38): xray + панель, sda1, DNAT 8443 (pf-guard переприменяет через ~60 с) поднимаются сами.
 
 **Смена региона по шагам:** (1) снапшот .dat + uci в `/mnt/sda1/wifi-region-test/<ts>-<from>-before-<to>/`; (2) uci `country` на обоих радио + commit; (3) `sed` в оба .dat; (4) `sync; reboot` из detached-скрипта с логом на USB (`( trap "" HUP; sh script ) >/dev/null 2>&1 </dev/null &` — на busybox нет `nohup`/`setsid`; Mac сидит на Wi-Fi flint2, SSH отвалится); (5) после бута — `DBDC_card0.dat`, `iwinfo rax0 freqlist`, при желании Country IE с ryzen; (6) инфра-чек: `/etc/init.d/xray status`, `netstat -tln | grep 9443`, `cat /proc/port_forward_rules`, `mount | grep sda1`.
+
+### 5.1g Инцидент 2026-11-14: пропал исходящий WAN; persistent syslog, wan-watchdog, апстримы AdGuard
+
+**Что было (21:01–21:11 Тбилиси).** Интернет пропал, владелец перезагрузил flint2 в 21:10:26 (грязно, ext4 на sda1 восстанавливал журнал). Роутер **не висел**: по журналу ryzen (`journalctl -k | grep geo8443-drop`) flint2 форвардил WAN→LAN (DNAT 8443) до самого ребута, линк ryzen↔flint2 не падал. Умер исходящий путь: cloudflared на ryzen потерял все туннели в 21:01:23, последнее принятое соединение Xray 21:03:27 (`/opt/xray/log/access.log`), с 21:04:33 AdGuard не отвечал ryzen по DNS (апстримы недостижимы). Причина недоказуема — syslog flint2 жил только в RAM. Похоже на сбой на стороне Silknet/шлюза `176.221.192.1` (ARP/BRAS или egress), ребут = DHCP + ARP заново. Ни одна сессия Claude роутер не трогала.
+
+**Рецепт диагностики без syslog:** access.log Xray по минутам; `docker logs cloudflared` на ryzen; dockerd «failed to query external DNS» в journal; `geo8443-drop` в `journalctl -k` как доказательство живого форвардинга.
+
+**Сделано 2026-11-14:**
+1. **Persistent syslog на eMMC:** `uci system.@system[0].log_file=/opt/log/syslog`, `log_size=8192` (ротация файла в `syslog.old` при 8 МБ, итого ≤16 МБ), `log_buffer_size=1024` (RAM-кольцо для `logread`). Не на USB и не в /tmp. Файл читать `tail -f /opt/log/syslog` или `grep <tag> /opt/log/syslog`.
+2. **`/usr/sbin/wan-watchdog`** (cron `* * * * *`, eMMC): пингует 1.1.1.1 / 8.8.8.8 / 9.9.9.9 через WAN-устройство и шлюз. Fail = ни один внешний не ответил. После 3 подряд → `ifup wan`; ещё через 3 → `ip link set eth1 down/up` + `ifup wan`; дальше только лог раз в 10 мин. На восстановлении — строка в syslog и Telegram (токен из `/mnt/sda1/watchdog/config.env`, если USB доступен). Первые 180 с после бута молчит. Состояние `/tmp/wan-watchdog.state`, lock `flock`. Тест: `WAN_WD_EXTERNAL=192.0.2.1 WAN_WD_STATE=/tmp/wd-test WAN_WD_DRY=1 /usr/sbin/wan-watchdog` ×3 → в syslog «DRY-RUN would run: ifup wan». В keep-list, FLINT_PATHS, `restore-after-upgrade.sh`.
+3. **AdGuard Home: Quad9 убран.** С канала Silknet DoH к `dns.quad9.net`/`dns10`/`dns11` и к 9.9.9.9/9.9.9.11 по TLS 1.3 не работает (handshake доходит до Certificate и зависает, 0/10), DoT 853 — 4–6 из 10, TLS 1.2 проходит, но 2.7 с; из DE/NL Quad9 отвечает. `upstream_dns`: `https://doh.opendns.com/dns-query` (10/10) + `https://dns.cloudflare.com/dns-query` (10/10), `upstream_mode: parallel`; `bootstrap_dns`: 1.1.1.1, 8.8.8.8, 9.9.9.10; `fallback_dns` Google без изменений. Также 10/10 с роутера: `security.cloudflare-dns.com`, `dns.google`, `dns.adguard-dns.com`; 0/10: Mullvad, dns0.eu. Бэкап `/etc/AdGuardHome/config.yaml.bak-2026-11-14`. Правка: `/etc/init.d/adguardhome stop` → sed → `start` (GL при этом перезагружает firewall целиком, это штатно).
+
+### 5.1h Инцидент GL.iNet CSA-2026-01 (взлом облака) и апгрейд flint2 4.11.0 → 4.11.1 (2026-11-23)
+
+**Что случилось у вендора.** 20–21.11.2026 через облако GL.iNet (GoodCloud) на роутеры и KVM рассылались команды от root. Механика (независимый разбор `github.com/RemoteToHome-io/gl-security-incident-2026`; официальное уведомление — `gl-inet.com/en-us/blogs/blog/glinet-security-notice-2026-11-20`): инъекция в обработчик `virtual_ip_info` модуля AstroWarp облачного клиента (`/usr/local/lib/lua/5.4/cloud/astrowarp.lua`, пакет `gl-sdk4-cloud`; поля `ip`/`virtualIp` без проверки подставлялись в `os.execute("iptables …")`). Обработчик есть во всех прошивках с 4.7.0 и срабатывает даже при выключенном AstroWarp; нужен только включённый и подключённый `gl-cloud`. Отдельно на части роутеров (MT2500/MT3000/MT6000/AX1800/AXT1800) находили **старый бэкдор** с датами установки 09.2025–05.2026 — способ установки неизвестен.
+
+**Чек-лист проверки роутера (read-only, по SSH).** Официальный индикатор один (`crond -i /tmp/.log`), у сообщества шире:
+
+```sh
+ls -la /etc/mp_ip_mapping_info                 # создаётся при КАЖДОМ вызове уязвимого обработчика, переживает ребут. Нет файла = не трогали
+iptables -t nat -S SDWAN_IP_MAPPING            # цепочки быть не должно (при выключенном AstroWarp)
+ps w | grep -E 'crond -i|mkfifo|nc [0-9]|sh -i|monitord|ujaild' | grep -v grep
+ls -la /tmp/f /tmp/.log /bin/ulogd /usr/bin/monitord /usr/sbin/ujaild /etc/config/.gl /etc/glinet/.cache
+cmp /etc/init.d/urandom_seed /rom/etc/init.d/urandom_seed && cmp /lib/upgrade/keep.d/netifd /rom/lib/upgrade/keep.d/netifd
+ls -l /bin/netstat; md5sum /bin/busybox /rom/bin/busybox     # netstat = симлинк на busybox, busybox = /rom
+grep -c gl-agent /etc/dropbear/authorized_keys              # чужой ключ
+grep -E '170\.39\.226\.|65\.20\.71\.131|66\.245\.219\.252' /proc/net/nf_conntrack
+grep -c -E 'adguardns\.(com|org)' /etc/AdGuardHome/data/querylog.json   # домены старого бэкдора (не AdGuard!)
+```
+
+Плюс: cron/`rc.local`/`/etc/udhcpc.user.d`/`/etc/profile.d` против `/rom`, процессы с exe вне прошивки, файлы overlay с mtime/ctime за последние недели, SSH-логины не из LAN. `gl-cloud` на уровне INFO **не логирует полученные команды** — по syslog вызов не доказать и не опровергнуть, поэтому опираемся на `/etc/mp_ip_mapping_info`.
+
+**Результат по flint2:** чисто по всем пунктам; хеш daily-бэкапа конфигов не менялся 15–23.11; облачная сессия при этом висела всё окно атаки (обрывы 20.11 08:04 и 09:41 Тбилиси — за ~16 ч до начала атаки, с инцидентом не связаны). Изменение `/etc/config/wireguard_server` 13.11 21:17 — владелец добавлял клиента.
+
+**Апгрейд 4.11.0 → 4.11.1 (Online, Keep Settings), 13:57–13:58, ~1,5 мин простоя.** Фикс: `mpifd/parameter_validator.lua` (ip/virtualIp — только IPv4, mac — только MAC), `gl-sdk4-cloud git-2026.323`, одноразовый `gl-sdk4-system-check` (`/etc/uci-defaults/00-system-check`). После: `deploy/restore-after-upgrade.sh` + `deploy/install.sh flint2`; сверка «до/после» (8 WG-пиров, 10 клиентов xray, md5 конфигов xray и AdGuard, 14 DHCP-резерваций, cron 9 строк, samba `force_root`, DNAT 8443 → Immich 200 через публичный адрес, xray 9443 снаружи) сошлась, отличается только версия. **Регион Wi-Fi US пережил апгрейд** (uci `country=US` → `gl-txpower-init`, как и описано в 5.1d). Появились слушатели `gl_nas_sys` 6000–6002 (WAN-drop на месте) и секция `wireless.halow0`. Логи xray и syslog на eMMC начались с нуля.
+
+**Что изменено в инструментах (2026-11-23):**
+- `deploy/restore-after-upgrade.sh` — **перенесён в git** этого репо (раньше жил только на Mac в `flint2-backups/`, вне любого бэкапа); в `flint2-backups/` осталась обёртка. Добавлено `mkdir -p /opt/xray/log /opt/log` + `/etc/init.d/log restart`: каталоги логов на eMMC не в keep-list, а xray пишет туда access/error.
+- `deploy/make-prefw.sh` — новый: собирает prefw-tarball **на роутере** (всё из `sysupgrade -l` + geo-базы xray, `.dat` региона, `gl_home.html`, init samba4/chronyd/transmission, `nginx.conf`, opkg status + манифесты в `prefw-work/manifest/`) и кладёт в три места: USB `/mnt/sda1/flint2-prefw/`, Mac `flint2-backups/` (plaintext, не в git), R2 `flint2-prefw/*.enc`. Свежие: `flint2-prefw-2026-11-23_1338` (до апгрейда, 4.11.0) и `…_1517` (после, 4.11.1).
+- Образ `flint2-backups/mt6000-4.11.1_release3-1221-1122-1795350114.bin`, sha256 `8126eb63…` (сверен с `/tmp/firmware_sha256` роутера).
+
+**Порядок на следующий апгрейд:** `deploy/make-prefw.sh` → `system-config-backup --force` + `xray-panel-backup` → скачать `.bin` и сверить sha256 (URL и хеш роутер держит в `/tmp/firmware_url`, `/tmp/firmware_sha256`) → записать baseline → Online Upgrade (Keep Settings) → `deploy/restore-after-upgrade.sh` → `deploy/install.sh flint2` → сверка baseline.
+
+**GoodCloud на 23.11 остался включён и привязан** на flint2 и Beryl 7 (решение владельца). В UI 4.11 отдельного тумблера нет — только **Unbind** на странице GL.iNet Account; по SSH: `/etc/init.d/gl-cloud stop; uci set gl-cloud.@cloud[0].enable='0'; uci commit gl-cloud; /etc/init.d/gl-cloud disable` (+ `rtty.general.ssh_en/web_en='0'`). См. пробел в §8.
 
 ### 5.2 Восстановление ryzen4700
 
@@ -698,6 +747,17 @@ deploy/install.sh beryl
 - Перенос: репитер к flint2 → апгрейд 4.8.7→4.9.0 (RPC, Keep Settings) → пакет конфигов из снапшота AX (VPN, AdGuard, кнопка, sing-box, xray, панель+сканы, rclone, pass, фид v2raya) → SSID/ключи → keep-list, cron → `deploy/install.sh` → LAN 192.168.200.1 → `restore-after-upgrade.sh` (zoneinfo-asia, htop, LuCI, localtime) → снапшоты R2 + Mac.
 - Грабли: tar с Mac переносит uid 501 (dropbear закрывает ключ) → `--uid 0 --gid 0` (в restore-скрипте); ручной IP на Ethernet Mac маскирует «нет DHCP»; 2.5G-линк после `network restart` надо переткнуть.
 - Старый Beryl AX выключен и полностью рабочий (откат = включить). Снапшоты обоих устройств лежат в одном префиксе R2 `beryl-snapshots/`, различать по `host:` в манифесте (GL-MT3000 vs GL-MT3600BE).
+
+### 5.3d Beryl 7: апгрейд 4.9.0 → 4.9.1, боковая кнопка и XRAY в новом GL UI (2026-11-23)
+
+Подробно: `beryl-xray-web-console/MIGRATION-BERYL7.md` §7 и `HANDOFF-DASHBOARD-INTEGRATION.md` (Phase 4b). Кратко:
+- **Проверка по инциденту CSA-2026-01 (5.1h):** чисто. Роутер был выключен 14.11 08:40 → 23.11 14:09 и окно атаки пропустил. Включённый, он сам выходит в интернет репитером к flint2 — «без WAN» проверить не выйдет.
+- **Апгрейд** Online + Keep Settings, 14:18–14:20; перед ним `beryl-config-backup --force` + `scripts/backup.sh beryl`, образ `beryl-backups/fw/mt3600be-4.9.1_release1-*.bin` (sha256 `3fb670be…`). После: `scripts/restore-after-upgrade.sh` → `deploy/install.sh beryl`, baseline сошёлся. Фикс в 4.9.1 встроен прямо в `cloud/astrowarp.lua` (whitelist-паттерн), отдельного валидатора, как на MT6000, нет.
+- **Грабли:** `scans/` панели restore-скрипт не доливал (каталог в tar-листинге со слешем — исправлено); ручная распаковка архива с записью `./` выставила `/` роутера в 700 → `chmod 755 /` (паковать по именам путей, после ручной распаковки в `/` смотреть `ls -ld /`).
+- **Почему боковая кнопка «не работала»:** с 27.10 `switch-button.func` был `vpn`/`5003` (штатный Tunnel 1 = WG-клиент `Flint2-GE`), наш hotplug `50-sing-box-switch` при штатной функции намеренно уступает. А карточки XRAY с селектором на Beryl 7 не было вовсе: VPN Dashboard в 4.9.x туннельный, launcher был написан под старую раскладку.
+- **Что сделано (launcher, Phase 4b):** (1) **System → Toggle Button Settings** — под «VPN» теперь `Tunnel 1 · WireGuard` и `XRAY (sing-box)`; выбор переключает VPN целиком (другой гасится, выбранный поднимается по положению кнопки). Реализовано подменой ответов штатных RPC в браузере, штатный бэкенд значение `xray` не видит. (2) **VPN Dashboard** — своя карточка XRAY в ряду туннелей: питание, статус, список профилей (клик = активировать), Kill Switch, Log, Panel. Нужен вход в `:9092` в том же браузере.
+- **Бэкап и разворачивание:** launcher в git (`router/www/xray-panel-launcher.js`), на роутере `/www/xray-panel-launcher.js` — в keep-list и в PATHS обоих pipeline; назначение кнопки — в `/etc/config/switch-button` и `/etc/config/sing-box` (там же). После прошивки `gl_home.html` приезжает без патча → `deploy/install.sh beryl`. Проверка без браузера: `node router/www/test/hooktest.js`, `node router/www/test/cardtest.js`. Снапшоты с новым launcher: R2 `beryl-self-mt3600be-20261123-…` и Mac/R2 `beryl-mt3600be-20261123-111852Z` (md5 launcher в снапшоте = git = роутер).
+- **Состояние на конец 23.11:** кнопка назначена на XRAY (`func=xray`, `bind_switch=1`), Tunnel 1 выключен, кнопка в OFF → sing-box не запущен. sing-box 1.13.11 оставлен: в 1.14 для схемы TUN + VLESS-Reality ничего нужного, а TUN там по умолчанию сам перехватывает DNS (риск конфликта с dnsmasq GL).
 
 ### 5.4 Восстановление Cloudflare Worker (exit1-telegram-relay)
 
@@ -1138,8 +1198,11 @@ ssh ryzen4700 'docker run --rm --network immich_default \
 1. **Сам флинт упал, но healthchecks при этом не алёртит** — только если интернет провайдера лёг **одновременно с флинтом**. Маловероятно но возможно.
 2. **R2 token revocation** — если случайно удалю токен в CF dashboard, backup pipeline молча начнут падать на R2 upload (локальные снапшоты остаются). Алёрта на это нет. Workaround: проверять `r2:sys-lab-home-backups/system-snapshots/` раз в месяц на наличие свежего файла.
 3. **Beryl постоянно офлайн >180 дней** — снапшот в R2 будет ротейтнут (R2_RETENTION_DAYS=180). Локального снапшота на самом beryl нет (всё в эфемерном /tmp). Оффлайн-копии: plaintext `beryl-xray-web-console/backups/beryl-*.tar.gz` на Mac (Pipeline 3, последняя 2026-10-25). Воскресный cron на beryl реально не срабатывает месяцами (роутер выключен) — следить за датой последнего `beryl-self-*` в R2.
-4. **Прошивка GL.iNet не бэкапится автоматически**, но образы лежат локально на Mac: `flint2-backups/*.bin` (4.9.0, 4.9.1, 4.11.0) и `beryl-backups/fw/` (4.8.1 и 4.11.0: `.tar` для панели + `.img` для U-Boot, sha256 рядом). Если флэшка испортится — ставить их через U-Boot, потом восстанавливать конфиги (5.1c / 5.3).
+4. **Прошивка GL.iNet не бэкапится автоматически**, но образы лежат локально на Mac: `flint2-backups/*.bin` (4.9.0, 4.9.1, 4.11.0, 4.11.1) и `beryl-backups/fw/` (MT3600BE 4.9.1 `.bin`; MT3000 4.8.1 и 4.11.0: `.tar` для панели + `.img` для U-Boot, sha256 рядом). Если флэшка испортится — ставить их через U-Boot, потом восстанавливать конфиги (5.1c / 5.3).
 5. **butler-home-ai после ребута ryzen** — `depends_on` соблюдается только при `docker compose up`, а не при авто-рестарте контейнеров по policy после ребута хоста. Теоретически возможны гонки старта (как было у searcharr). Редко; лечится ручным `docker compose up -d` или `/lockdown` на время.
 6. **Шифр-пароли бэкапов** (`/etc/system-backup.pass`, `~/butler-home-ai/.backup-pass`) — если потерять И хост, И зашифрованную заметку, R2-копии не расшифровать. Поэтому пароли обязательно дублируются в зашифрованных заметках.
 7. **DJI дрон-архив (~107 GB) не в облаке** — только 2 локальные копии: Mac SSD `NVME-SSD/DJI` + `ryzen4700:/mnt/media/DJI` (см. 6.8). Одновременная гибель обоих дисков = потеря архива. R2 не используется из-за объёма/цены. Флешки дрона чистятся после hash-верифицированного копирования — на них рассчитывать нельзя.
 8. **Wi-Fi-регион flint2 временно US (тест с 2026-11-10)** — DE-снапшот и скрипт возврата `revert-de.sh` лежат только на USB `flint2:/mnt/sda1/wifi-region-test/` (не в system-config-backup и не в R2). Если USB умрёт до возврата — запасной путь через uci `country=DE` + reboot, см. 5.1f.
+9. **GoodCloud включён на flint2 и Beryl 7 (на 2026-11-23).** Исправленные прошивки (4.11.1 / 4.9.1) закрывают инъекцию из инцидента CSA-2026-01, но автор независимого разбора сообщил GL.iNet о второй слабости облачного клиента, не закрытой на 22.11. Пока облако включено, это остаётся точкой входа с правами root; удалённое управление у нас дублируется WireGuard-сервером и xray. Как выключить — 5.1h.
+10. **Beryl AX (GL-MT3000) не проверен по CSA-2026-01 и стоит на уязвимой 4.11.0.** Он был выключен в окно атаки, но работал в месяцы, когда на MT3000 ставили «старый бэкдор» (09.2025–05.2026). При включении: сначала чек-лист 5.1h (особо `/bin/ulogd`, `urandom_seed` vs `/rom`, `keep.d/netifd`), затем апгрейд до 4.11.1. Тот же адрес 192.168.200.1, что у Beryl 7 — включать по очереди.
+11. **`flint2-backups/` и `beryl-backups/` — только на Mac, не в git** (в iCloud Drive лежит старая ручная копия, на 23.11 без файлов этого дня). Там prefw-tarball'ы (дубль на USB роутера и в R2), образы прошивок (скачиваются заново), дамп Factory Beryl 7 (дубль в R2) и `UPGRADE-PLAN-*.md` flint2 (**единственная копия**). Скрипты восстановления оттуда вынесены в git 2026-11-23.
