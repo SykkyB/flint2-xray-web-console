@@ -49,6 +49,9 @@ ls /etc/rc.d > $M/rc.d.txt
 ps w > $M/ps.txt
 md5sum /usr/bin/xray /usr/bin/xray-panel /www/gl_home.html /www/xray-panel-launcher.js > $M/md5.txt 2>/dev/null || true
 L=/tmp/.prefw.list
+# Список собираем без `set -e`: под ним группа в пайпе обрывалась после первой команды,
+# и в архив попадал только keep-list (без манифестов, geo-баз и gl_home.html) — так вышло 23 и 25.11.2026.
+set +e
 { cat $M/keep-list.txt
   find /usr/share/xray /etc/wireless/mediatek /etc/sysctl.d /etc/AdGuardHome -path /etc/AdGuardHome/data -prune -o -type f -print 2>/dev/null
   for f in /www/gl_home.html /www/gl_home.html.bak /www/index.html /etc/init.d/samba4 /etc/init.d/chronyd /etc/init.d/transmission /etc/nginx/nginx.conf /usr/lib/opkg/status /etc/modules.d/usb-storage; do [ -e $f ] && echo $f; done
@@ -57,7 +60,9 @@ L=/tmp/.prefw.list
 cd / && tar -czf "$OUT" -T $L 2>/dev/null || true
 rm -rf /prefw-work $L
 cd "$D" && sha256sum "$(basename "$OUT")" > "${OUT%.tar.gz}.sha256"
-tar -tzf "$OUT" | grep -q -x usr/bin/xray || { echo "ERR: в архиве нет usr/bin/xray" >&2; exit 1; }
+for must in usr/bin/xray prefw-work/manifest/crontab.txt www/gl_home.html etc/wireless/mediatek/DBDC_card0.dat; do
+    tar -tzf "$OUT" | grep -q -x "$must" || { echo "ERR: в архиве нет $must" >&2; exit 1; }
+done
 basename "${OUT%.tar.gz}"
 REMOTE
 )
