@@ -13,6 +13,7 @@
 | **ryzen4700** | домашний сервер, Immich + бот, cloudflared, media-srv (Jellyfin + *arr + Jellyseerr + Searcharr), **butler-home-ai** (Telegram→Claude агент по инфре), **domovoy** (голосовой помощник по хозяйству: списки/календарь/напоминалки) + **Mealie** (рецепты) | 192.168.100.5 | Ubuntu 24.04 | `ryzen4700` |
 | **beryl** | travel-роутер, sing-box VPN-клиент; дома — репитер к flint2 (wwan `apclii0`, 192.168.100.x). **С 2026-10-26 это Beryl 7 (GL-MT3600BE)**, бывший CN-юнит: 2026-10-27 код региона в Factory перешит на US, панель стоковая (см. 5.3c) | 192.168.200.1 | OpenWrt 21.02 (GL-MT3600BE), прошивка **4.9.0** | `beryl`, `beryl7` |
 | **beryl-ax** | бывший тревел-роутер Beryl AX (GL-MT3000), 4.11.2 (с 2026-11-25), полностью рабочий; кандидат в mesh-узел на кухню (5.3b) | — | OpenWrt 21.02 (GL-MT3000) | — |
+| **xiaomi** | Xiaomi Redmi Router AC2100 (RM2100, MT7621A) на **Kwrt 24.10-SNAPSHOT** — тупая точка/свитч в LAN за flint2 (порт `lan2`, гигабит). Радио выключено владельцем, Wi-Fi не раздаёт; DHCP-сервер выключен (`dhcp.lan.ignore=1`), маршрутизация через flint2. Взят под документацию и бэкап 2026-11-27, см. 5.1j | 192.168.100.2 | Kwrt 24.10-SNAPSHOT (ядро 6.6.118) | `xiaomi` |
 
 Доменные имена (через DNS sys-lab.xyz):
 - `immich.sys-lab.xyz:8443` → ryzen4700 (Caddy :8443 → immich:2283), через DNAT `port_forward` на flint2 (WAN:8443 → 192.168.100.5:8443)
@@ -20,7 +21,7 @@
 - `seerr.media.sys-lab.xyz:8443` → ryzen4700 (тот же DNAT, Caddy :8443 → seerr:5055), **добавлено 2026-09-23**, см. 6.7b
 - `vpn.sys-lab.xyz:9443` → flint2, XRAY VLESS+Reality (Vision, dest www.cloudflare.com) для VPN-клиентов. **Порт 9443, не 8443** (8443 — DNAT на Caddy ryzen, см. выше); Xray **26.11.9** с 2026-11-10, логи и ротация — §5.1e
 - `kitchen.sys-lab.xyz` → Mealie (рецепты domovoy) на ryzen, **через Cloudflare Tunnel** (cloudflared, published application route → `http://mealie:9000`, mealie в сети `proxy`) + **Cloudflare Access** (email-OTP, политика `household` = твой+женин email). TLS на edge Cloudflare, без проброса портов. API бота к Mealie идёт внутри docker (`http://mealie:9000`), мимо Access.
-- Публичный IP: `176.221.192.204` (домашний провайдер на flint2)
+- Публичный IP: `176.221.192.204` (домашний провайдер на flint2). ONT Silknet — **CABSAT GM203-7B** (GPON, bridge-режим, публичный IP уезжает прямо на flint2, двойного NAT нет). Тариф **TURBO** (max 100 Мбит, «actual available» 80). **С 2026-11-27 WAN-линк 1 Гбит/с** — до этого 100 Мбит из-за Fast-Ethernet-порта ONT, см. 5.1j
 
 ---
 
@@ -139,7 +140,7 @@ ssh flint2 'crontab -l | sed "s|^#\(.*hc-ping.com.*\)|\1|" | crontab -'
 
 ---
 
-## 3. Бэкапы — 7 независимых pipeline
+## 3. Бэкапы — 8 независимых pipeline
 
 ```
             ┌─────────────────────────────────────────────────┐
@@ -393,6 +394,29 @@ uci commit samba4
 **Мониторинг:** чек `backup_immich` в Layer 1 (см. раздел 2) — алёрт, если последний успешный daily старше 30 часов.
 
 **Restore:** см. шаг 10 в разделе 5.
+
+---
+
+### Pipeline 8 — xiaomi (Redmi AC2100) manual from Mac (`deploy/backup-xiaomi.sh`)
+
+**Добавлено 2026-11-27.** Единственный роутер без self-backup по cron и без R2: это LAN-only листовой узел за flint2 — нет WAN, нет rclone и нет причины когда-либо держать на нём R2-креды. Снапшот снимается с Mac руками, перед изменениями и после них.
+
+```sh
+deploy/backup-xiaomi.sh            # цель по умолчанию — ssh-алиас xiaomi
+```
+
+**Куда:** `home-lab/xiaomi-backups/xiaomi-ac2100-<UTC>.tar.gz` + `.sha256`. Каталог **вне репозитория**, как `flint2-backups/` и как gitignored `beryl-xray-web-console/backups/`: в снапшоте приватный ключ WireGuard (`wg0`), host-ключи dropbear и `/etc/shadow`. Секреты в git не уезжают.
+
+**Скоуп:** `/etc/config` целиком (network с ключами wg0, wireless, firewall, dhcp, dropbear, nginx, upnpd, passwall, passwall_server, system), `/etc/dropbear`, `/etc/{passwd,shadow,group}`, `/etc/crontabs`, `/etc/firewall.user`, `/etc/sysupgrade.conf`, `/etc/opkg`, `/root`. Плюс манифест внутри архива (`tmp/xiaomi-backup-manifest.txt`): модель, релиз, ядро, адреса, скорость линка по портам, слушающие сокеты, `uci export system`, keep-list `sysupgrade -l`, включённые сервисы, список пакетов. Первый снапшот — `xiaomi-ac2100-20261127-120938Z.tar.gz`, 42 файла, 15 КБ.
+
+**Грабля busybox tar:** два `-C` в одной команде он переставляет при разборе опций, и пути до второго `-C` молча перекореняются (первый прогон собрал архив из одного манифеста). Поэтому в скрипте ровно один `-C /`, а манифест едет как `tmp/xiaomi-backup-manifest.txt`.
+
+**Restore** — только на тот же образ: фиды Kwrt для этой сборки отдают 404 (см. 5.1j), доустановить пакеты нечем.
+```sh
+scp -O ../xiaomi-backups/xiaomi-ac2100-<ts>.tar.gz xiaomi:/tmp/
+ssh xiaomi 'tar xzf /tmp/xiaomi-ac2100-<ts>.tar.gz -C /'
+ssh xiaomi 'reboot'
+```
 
 ---
 
@@ -665,6 +689,36 @@ ssh flint2 'sh -s -- --check --no-report --no-color' < gl-helper-triage.sh
 Результат на обоих: **IOC=0**, «no gl-helper indicators found». В REVIEW — наши бинари/скрипты/ключи и три «чужих» пункта, все объяснены: `/usr/bin/login → busybox` (создаёт `/rom/etc/uci-defaults/80_nginx-oui` при первом старте), `/usr/bin/gl_wg → wg` (`/rom/lib/netifd/proto/wgserver.sh`), учётка `stubby` на Beryl AX (служебная для `/etc/init.d/stubby-vpn`, shadow `x`, shell `/bin/false`, есть в снапшотах с 22.06). Оговорка самого скрипта: после перезагрузки и на прошивке с автоочисткой он не показывает, что было раньше — наша опора остаётся на проверку **до** прошивки 23.11 (5.1h). Beryl 7 (4.9.2) проверен тем же скриптом 25.11 16:34: **IOC=0**, REVIEW — те же наши файлы + `stubby` и `/usr/bin/login`; исходящие соединения nginx роутера на 104.26.8.248 — это `fw.gl-inet.com` (проверка прошивки из открытой веб-морды). Итого все три роутера: IOC=0. Смену ключей/паролей (совет GL.iNet для всех устройств, бывавших в их облаке) владелец 25.11 отложил.
 
 **Логи mesh забивают `/tmp` на flint2 (обнаружено 25.11, не исправлено в 4.11.2).** При `gl-mesh.@base[0].enabled=1` (controller) prplMesh пишет в `/tmp/beerocks/logs/` файлы по 1 МБ (`log_global_size=1000000`, `log_files_auto_roll=true` в `/opt/prplmesh/config/beerocks_*.conf`) и **старые не удаляет** — чистит только `/etc/init.d/gl-mesh` при старте (`rm -rf /tmp/beerocks/logs/`). На 4.11.1 набежало 175 МБ за 2 суток (ровно 20–24 файла за 6 ч ≈ 85 МБ/сутки; tmpfs `/tmp` = 495 МБ → заполнение на ~6-й день). Содержимое — раз в секунду пара ошибок `Failed updating VAP statistics for iface=raxN` / `Failed to read Enable from Device.WiFi.SSID…` по выключенным гостевым/IoT VAP. На 4.11.0 такого не было (26 МБ в `/tmp` после 8 суток). После 4.11.2 те же ошибки пошли с первой минуты. Проверка: `du -sk /tmp/beerocks/logs; df -h /tmp`. Варианты: cron-чистка закрытых файлов (busybox `find` умеет `-mmin`, но не `-delete`): `find /tmp/beerocks/logs -type f -name '*.20*_*.log' -mmin +180 -exec rm -f {} +`; либо выключить mesh (не нужен с 30.10), но смена режима mesh на flint2 переписывает network/wireless и ребутит — делать отдельно. **Решено 25.11 16:21: владелец выключил mesh (он не нужен), рост прекратился; чистка не ставилась. Побочный эффект выключения — см. 5.3b.**
+
+### 5.1j WAN вышел на гигабит; апстримы AdGuard; второй роутер под документацией (2026-11-27)
+
+**WAN был зажат в 100 Мбит портом ONT — не кабелем и не тарифом.** `ethtool eth1` показывал `Speed: 100Mb/s`, партнёр анонсировал только `10baseT/100baseT`. Первая гипотеза (кабель на 4 жилы) оказалась неверной, но и «порт FE» по одному анонсу не доказывается: 1000BASE-T требует все 4 пары, и PHY с gigabit downshift после неудачного обучения **сам убирает** `1000baseT/Full` из анонса — подпись получается ровно такая же, как у честного FE-порта. Разделили перебором: восьмижильный кабель в **порту 3** ONT дал те же 100 Мбит, в **порту 1** — `Speed: 1000Mb/s` и `1000baseT/Full` в анонсе партнёра. У ONT **CABSAT GM203-7B** (Silknet, GPON, bridge, LAN-адрес `192.168.100.1` — совпадает с самим flint2, поэтому его веб-морда из домашней сети недостижима, только прямым подключением ноута в свободный порт) раскладка **3×FE + 1×GE**, гигабитный — LAN1.
+
+Практический выигрыш сегодня невелик: тариф **TURBO** = max 100 Мбит при «actual available» 80, то есть FE-порт почти ничего не отнимал (100BASE-TX отдаёт ~94 Мбит). Но апгрейд на **FORMULA 1** (150/120 Мбит, 100 ₾ против 75 ₾) при FE-порте был бы выброшенными деньгами, а теперь возможен.
+
+Попутно вычищены все стомегабитные сегменты LAN: `lan2` (Xiaomi) тоже поднялся на гигабит после замены 4-жильного кабеля. Сейчас гигабит на **всех** проводных линках flint2: eth1/WAN, lan2 (xiaomi), lan3 (ryzen), lan4 (Zyxel кухни).
+
+**Апстримы AdGuard переставлены.** Замеры DoH с линии (connect / +TLS / total, мс): `https://1.1.1.1/dns-query` — 4.5 / 46.6 / **49.7**; `cloudflare-dns.com` — 9.9 / 51.3 / 56.9; `dns.cloudflare.com` — 10.8 / 51.3 / 57.3 (резолвится в CDN-адреса `162.159.61.8` и `172.64.41.8`, **не** в anycast 1.1.1.1); `doh.opendns.com` — 78.7 / 184.6 / **257.8**; `dns.google` — 42.9 / 150.3 / 197.5. ICMP для контекста: Silknet 3.4, Cloudflare 4.1, Google 39, OpenDNS 58, **Quad9 209** (подтверждает отказ от Quad9 от 14.11, см. 5.1g).
+
+Стало в `/etc/AdGuardHome/config.yaml` (бэкап прежнего — `config.yaml.bak-20261127`, он в скоупе `system-config-backup`, но не в keep-list):
+- `upstream_dns`: `https://1.1.1.1/dns-query` + `https://dns.google/dns-query` (IP прямо в URL убирает bootstrap-резолв и гарантирует ближайшую точку Cloudflare в Тбилиси)
+- `bootstrap_dns`: `1.1.1.1`, `8.8.8.8`, `1.0.0.1` (вместо `9.9.9.10` — Quad9 на 209 мс)
+- `fallback_dns`: туда переехал OpenDNS (не выброшен, но опрашивается только при отказе обоих апстримов)
+- `upstream_mode: parallel` не трогали — он спрашивает всех разом и берёт первый ответ, так что медленный второй апстрим латентность не портит
+
+Результат: холодный NXDOMAIN 72–88 → **68–76 мс**; реальные домены по пустому кэшу 8–48 мс (8 мс = попадание в кэш тбилисской точки Cloudflare, 48 мс = настоящая рекурсия); повторные — 0 мс. Выигрыш скромный и ожидаемый: основная часть холодного запроса — рекурсия на стороне апстрима, на неё мы не влияем.
+
+**Проверено отдельно: `/etc/AdGuardHome/config.yaml` переживает перепрошивку.** Он во **встроенном** keep-list GL — `/lib/upgrade/keep.d/adguardhome-conntrack` (файл из одной строки), а не в `/etc/sysupgrade.conf`. Авторитетная проверка — `sysupgrade -l`, она объединяет оба источника и показывает также `/etc/config/adguardhome`. Добавлять путь в `sysupgrade.conf` или в `restore-after-upgrade.sh` **не нужно**. Не переживает прошивку `/etc/AdGuardHome/data` (4.7 МБ: журнал запросов, статистика, тела фильтров) — но определения фильтров и свои правила лежат в самом `config.yaml` и перекачаются.
+
+**Xiaomi Redmi AC2100 (`192.168.100.2`) взят под документацию, доступ и бэкап.** Роль — тупая точка/свитч за flint2 на `lan2`; MAC `9C:9D:7E:50:71:23` (OUI Xiaomi), прошивка **Kwrt 24.10-SNAPSHOT** (`DISTRIB_REVISION=12.04.2025`, ядро 6.6.118, MT7621A, `mipsel_24kc`). SSH: алиас `xiaomi`, отдельный ключ `~/.ssh/xiaomi`, публичная половина в `/etc/dropbear/authorized_keys`. Бэкап — Pipeline 8.
+
+Аудит 27.11 и что по нему сделано:
+- **Время** стояло `Asia/Shanghai` (CST, +4 ч к реальному — логи не сопоставлялись с остальной инфрой) → `zonename=Asia/Tbilisi`, `timezone=<+04>-4`. NTP оставлен как был (`ntp.aliyun.com`, `0.openwrt.pool.ntp.org`).
+- **UPnP/NAT-PMP работал** (miniupnpd: `0.0.0.0:5000`, SSDP 1900, NAT-PMP 5351) на устройстве **без WAN** — бессмысленная поверхность атаки, любой клиент LAN мог дёргать маппинги. Выключен: `upnpd.config.enabled=0` + `/etc/init.d/miniupnpd stop && disable`. Проверено: 0 процессов, 0 сокетов.
+- **dropbear принимал пароль** (`PasswordAuth=on`, `RootPasswordAuth=on`). После проверки ключа обе переведены в `off` — сервер теперь предлагает только `publickey`. Откат при утере ключа — через LuCI (System → Administration).
+- **Обновлений через opkg нет и не будет.** Все фиды Kwrt (`dl.openwrt.ai/releases/24.10/...`, включая `base` и `targets/.../6.6.118`) отдают **404** — снапшот вычищен с зеркала, `/var/opkg-lists/` пуст. Интернет с роутера при этом есть (ping 1.1.1.1 — 4.2 мс), официальные фиды openwrt.org отвечают 200. Единственный путь обновления — перепрошивка свежим образом Kwrt либо переход на официальный OpenWrt 24.10.x с долгоживущими фидами. Текущая сборка примерно годовой давности.
+- **Не трогали, но стоит пересмотреть.** `dnsmasq` слушает `192.168.100.2:53`: клиент, прописавший этот адрес руками, обойдёт AdGuard — трафик идёт через свитч и до netfilter флинта не доходит, а правило `adg_redirect` ловит только `--dst-type LOCAL`. WireGuard-сервер на `0.0.0.0:51820` (`wg0` = `192.168.110.1/24`, два пира с PSK) — снаружи недостижим, порт на flint2 не проброшен; похоже, наследие времён, когда коробка была основным роутером. LuCI висит на `:80` и `:443`. Установлены `passwall` и `passwall_server` (не слушают).
+- **Проблемой не является:** DHCP-сервер выключен (`dhcp.lan.ignore=1`), рогового DHCP в сети нет, аренд не выдавал.
 
 ### 5.2 Восстановление ryzen4700
 
